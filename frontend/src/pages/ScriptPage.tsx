@@ -2,6 +2,11 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useUI } from '@/context/UIContext'
 import apiClient from '@/lib/apiClient'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 
 export default function ScriptPage() {
   const [scriptInput, setScriptInput] = useState('')
@@ -42,31 +47,30 @@ export default function ScriptPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex justify-between items-center">
             <h1 className="text-2xl font-bold text-gray-900">Script Console</h1>
-            <button onClick={() => navigate('/dashboard')} className="btn btn-secondary">
+            <Button onClick={() => navigate('/dashboard')} variant="secondary">
               Back to Dashboard
-            </button>
+            </Button>
           </div>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="card mb-6">
-          <div className="card-header">
-            <h2 className="text-lg font-semibold">Script Input</h2>
-          </div>
-          <div className="card-body">
-            <textarea
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle>Script Input</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Textarea
               value={scriptInput}
               onChange={(e) => setScriptInput(e.target.value)}
-              className="input font-mono text-sm"
+              className="font-mono"
               rows={10}
               placeholder="Enter your script or command here..."
             />
             <div className="mt-4">
-              <button
+              <Button
                 onClick={handleRunScript}
                 disabled={loading}
-                className="btn btn-primary"
               >
                 {loading ? (
                   <span className="flex items-center">
@@ -76,21 +80,21 @@ export default function ScriptPage() {
                 ) : (
                   'Run Script'
                 )}
-              </button>
+              </Button>
             </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
 
-        <div className="card">
-          <div className="card-header">
-            <h2 className="text-lg font-semibold">Output</h2>
-          </div>
-          <div className="card-body">
+        <Card>
+          <CardHeader>
+            <CardTitle>Output</CardTitle>
+          </CardHeader>
+          <CardContent>
             <pre className="bg-gray-900 text-green-400 p-4 rounded-md overflow-x-auto font-mono text-sm min-h-[200px]">
               {scriptOutput || '// Output will appear here'}
             </pre>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       </main>
     </div>
   )

@@ -6,6 +6,7 @@ import './assets/styles/index.css'
 
 // Initialize Mapbox GL and Turf as global variables (like the old Vue app)
 import mapboxgl from 'mapbox-gl'
+// @ts-ignore - turf module resolution issue with bundler
 import * as turf from '@turf/turf'
 
 ;(window as any).mapboxgl = mapboxgl
@@ -16,7 +17,12 @@ mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || ''
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter>
+    <BrowserRouter
+      future={{
+        v7_startTransition: true,
+        v7_relativeSplatPath: true,
+      }}
+    >
       <App />
     </BrowserRouter>
   </React.StrictMode>

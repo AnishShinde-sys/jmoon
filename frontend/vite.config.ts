@@ -13,6 +13,10 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
+    // Removed COOP header to allow external resources (Mapbox CSS) and window.closed calls
+    // headers: {
+    //   'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+    // },
   },
   build: {
     outDir: 'dist',

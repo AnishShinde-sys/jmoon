@@ -1,0 +1,149 @@
+import { useState } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { useUI } from '@/context/UIContext'
+import { Farm } from '@/types/farm'
+import Drawer from '../ui/Drawer'
+import { 
+  MapIcon, 
+  ChartBarIcon, 
+  UserGroupIcon,
+  PencilIcon
+} from '@heroicons/react/24/outline'
+import apiClient from '@/lib/apiClient'
+
+const DRAWER_NAME = 'farmDetails'
+
+export default function FarmDetailsDrawer() {
+  const { farmId } = useParams<{ farmId: string }>()
+  const navigate = useNavigate()
+  const { drawers, closeDrawer, openDrawer } = useUI()
+  const [farm, setFarm] = useState<Farm | null>(null)
+
+  // Load farm details when drawer opens
+  if (drawers[DRAWER_NAME] && !farm) {
+    apiClient.get(`/api/farms/${farmId}`).then(response => {
+      setFarm(response.data)
+    }).catch(error => {
+      console.error('Failed to load farm:', error)
+    })
+  }
+
+  const handleAction = (action: string) => {
+    closeDrawer(DRAWER_NAME)
+    switch (action) {
+      case 'datasets':
+        openDrawer('datasets')
+        break
+      case 'plugins':
+        openDrawer('plugins')
+        break
+      case 'collaborators':
+        openDrawer('collaborators')
+        break
+      case 'blocks':
+        openDrawer('blocks')
+        break
+      default:
+        break
+    }
+  }
+
+  return (
+    <Drawer 
+      isOpen={drawers[DRAWER_NAME] || false} 
+      title={farm?.name || 'Farm Details'}
+      onClose={() => closeDrawer(DRAWER_NAME)} 
+      position="right"
+      showBackdrop={false}
+    >
+      <div className="space-y-4">
+        {/* Farm Description */}
+        {farm?.description && (
+          <div className="p-3 bg-gray-50 rounded-md">
+            <p className="text-sm text-gray-700">{farm.description}</p>
+          </div>
+        )}
+
+        {/* Quick Actions */}
+        <div className="space-y-2">
+          <button
+            onClick={() => handleAction('datasets')}
+            className="w-full p-3 border border-gray-200 rounded-md hover:bg-gray-50 text-left flex items-center gap-3"
+          >
+            <MapIcon className="w-5 h-5 text-primary-600" />
+            <div>
+              <p className="font-medium text-sm">Datasets</p>
+              <p className="text-xs text-gray-500">View and manage datasets</p>
+            </div>
+          </button>
+
+          <button
+            onClick={() => handleAction('plugins')}
+            className="w-full p-3 border border-gray-200 rounded-md hover:bg-gray-50 text-left flex items-center gap-3"
+          >
+            <ChartBarIcon className="w-5 h-5 text-primary-600" />
+            <div>
+              <p className="font-medium text-sm">Plugins</p>
+              <p className="text-xs text-gray-500">Use analysis tools</p>
+            </div>
+          </button>
+
+          <button
+            onClick={() => handleAction('blocks')}
+            className="w-full p-3 border border-gray-200 rounded-md hover:bg-gray-50 text-left flex items-center gap-3"
+          >
+            <ChartBarIcon className="w-5 h-5 text-primary-600" />
+            <div>
+              <p className="font-medium text-sm">Blocks</p>
+              <p className="text-xs text-gray-500">Manage field blocks</p>
+            </div>
+          </button>
+
+          <button
+            onClick={() => handleAction('collaborators')}
+            className="w-full p-3 border border-gray-200 rounded-md hover:bg-gray-50 text-left flex items-center gap-3"
+          >
+            <UserGroupIcon className="w-5 h-5 text-primary-600" />
+            <div>
+              <p className="font-medium text-sm">Collaborators</p>
+              <p className="text-xs text-gray-500">Manage team members</p>
+            </div>
+          </button>
+        </div>
+
+        {/* Farm Stats */}
+        {farm && (
+          <div className="pt-4 border-t">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-xs text-gray-500">Total Area</p>
+                <p className="text-sm font-medium">
+                  {farm.totalArea ? `${(farm.totalArea / 10000).toFixed(2)} ha` : 'N/A'}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Blocks</p>
+                <p className="text-sm font-medium">{farm.blockCount || 0}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Datasets</p>
+                <p className="text-sm font-medium">{farm.datasetCount || 0}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Updated</p>
+                <p className="text-sm font-medium">
+                  {new Date(farm.updatedAt).toLocaleDateString()}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </Drawer>
+  )
+}
+
+
+
+
+

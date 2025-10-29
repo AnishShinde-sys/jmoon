@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useUI } from '@/context/UIContext'
 import apiClient from '@/lib/apiClient'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 
 interface Statistics {
   users: number
@@ -41,9 +43,9 @@ export default function AdminPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex justify-between items-center">
             <h1 className="text-2xl font-bold text-gray-900">Admin Dashboard</h1>
-            <button onClick={() => navigate('/dashboard')} className="btn btn-secondary">
+            <Button onClick={() => navigate('/dashboard')} variant="secondary">
               Back to Dashboard
-            </button>
+            </Button>
           </div>
         </div>
       </header>
@@ -56,36 +58,36 @@ export default function AdminPage() {
         ) : (
           <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-              <div className="card">
-                <div className="card-body text-center">
+              <Card>
+                <CardContent className="text-center pt-6">
                   <p className="text-4xl font-bold text-primary-600">{stats?.users || 0}</p>
                   <p className="text-sm text-gray-600 mt-2">Total Users</p>
-                </div>
-              </div>
-              <div className="card">
-                <div className="card-body text-center">
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="text-center pt-6">
                   <p className="text-4xl font-bold text-primary-600">{stats?.farms || 0}</p>
                   <p className="text-sm text-gray-600 mt-2">Total Farms</p>
-                </div>
-              </div>
-              <div className="card">
-                <div className="card-body text-center">
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="text-center pt-6">
                   <p className="text-4xl font-bold text-primary-600">{stats?.datasets || 0}</p>
                   <p className="text-sm text-gray-600 mt-2">Total Datasets</p>
-                </div>
-              </div>
+                </CardContent>
+              </Card>
             </div>
 
-            <div className="card">
-              <div className="card-header">
-                <h2 className="text-lg font-semibold">System Information</h2>
-              </div>
-              <div className="card-body">
-                <p className="text-sm text-gray-600">
+            <Card>
+              <CardHeader>
+                <CardTitle>System Information</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <CardDescription>
                   Statistics last updated: {stats?.date ? new Date(stats.date).toLocaleString() : 'N/A'}
-                </p>
-              </div>
-            </div>
+                </CardDescription>
+              </CardContent>
+            </Card>
           </>
         )}
       </main>

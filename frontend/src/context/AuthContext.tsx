@@ -1,122 +1,113 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
-import { User as SupabaseUser, Session } from '@supabase/supabase-js'
-import { supabase } from '@/lib/supabaseClient'
-import { User } from '@/types/user'
-import apiClient from '@/lib/apiClient'
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import {
+  User as FirebaseUser,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  onAuthStateChanged,
+  updateProfile,
+  signInWithPopup,
+  GoogleAuthProvider
+} from 'firebase/auth'
+import { auth } from '@/lib/firebase'
+
+interface User {
+  id: string
+  email: string
+  displayName?: string
+}
 
 interface AuthContextType {
-  user: SupabaseUser | null
-  profile: User | null
-  session: Session | null
+  user: User | null
   loading: boolean
   signIn: (email: string, password: string) => Promise<void>
   signUp: (email: string, password: string, displayName?: string) => Promise<void>
+  signInWithGoogle: () => Promise<void>
   signOut: () => Promise<void>
-  refreshProfile: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
+function mapFirebaseUser(firebaseUser: FirebaseUser): User {
+  return {
+    id: firebaseUser.uid,
+    email: firebaseUser.email || '',
+    displayName: firebaseUser.displayName || undefined,
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<SupabaseUser | null>(null)
-  const [profile, setProfile] = useState<User | null>(null)
-  const [session, setSession] = useState<Session | null>(null)
+  const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // Fetch user profile from backend
-  const fetchProfile = async (userId: string) => {
-    try {
-      const response = await apiClient.get('/api/users/me')
-      setProfile(response.data)
-    } catch (error) {
-      console.error('Error fetching user profile:', error)
-      // Profile might not exist yet for new users
-      setProfile(null)
-    }
-  }
-
   useEffect(() => {
-    // Check active sessions and sets the user
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      if (session?.user) {
-        fetchProfile(session.user.id)
-      }
-      setLoading(false)
-    })
-
-    // Listen for changes on auth state
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      if (session?.user) {
-        fetchProfile(session.user.id)
+    // Listen for auth state changes
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      if (firebaseUser) {
+        setUser(mapFirebaseUser(firebaseUser))
       } else {
-        setProfile(null)
+        setUser(null)
       }
       setLoading(false)
     })
 
-    return () => subscription.unsubscribe()
+    return () => unsubscribe()
   }, [])
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
-    if (error) throw error
+    try {
+      const result = await signInWithEmailAndPassword(auth, email, password)
+      setUser(mapFirebaseUser(result.user))
+    } catch (error: any) {
+      console.error('Sign in error:', error)
+      throw new Error(error.message || 'Failed to sign in')
+    }
   }
 
   const signUp = async (email: string, password: string, displayName?: string) => {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          display_name: displayName,
-        },
-      },
-    })
-    if (error) throw error
+    try {
+      const result = await createUserWithEmailAndPassword(auth, email, password)
 
-    // Create user profile in backend
-    if (data.user) {
-      try {
-        await apiClient.post('/api/users/me', {
-          displayName: displayName || '',
-          emailNotifications: true,
-        })
-      } catch (err) {
-        console.error('Error creating user profile:', err)
+      // Update display name if provided
+      if (displayName) {
+        await updateProfile(result.user, { displayName })
       }
+
+      setUser(mapFirebaseUser(result.user))
+    } catch (error: any) {
+      console.error('Sign up error:', error)
+      throw new Error(error.message || 'Failed to sign up')
+    }
+  }
+
+  const signInWithGoogle = async () => {
+    try {
+      const provider = new GoogleAuthProvider()
+      const result = await signInWithPopup(auth, provider)
+      setUser(mapFirebaseUser(result.user))
+    } catch (error: any) {
+      console.error('Google sign in error:', error)
+      throw new Error(error.message || 'Failed to sign in with Google')
     }
   }
 
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut()
-    if (error) throw error
-    setProfile(null)
-  }
-
-  const refreshProfile = async () => {
-    if (user) {
-      await fetchProfile(user.id)
+    try {
+      await firebaseSignOut(auth)
+      setUser(null)
+    } catch (error: any) {
+      console.error('Sign out error:', error)
+      throw new Error(error.message || 'Failed to sign out')
     }
   }
 
   const value = {
     user,
-    profile,
-    session,
     loading,
     signIn,
     signUp,
+    signInWithGoogle,
     signOut,
-    refreshProfile,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

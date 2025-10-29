@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { supabase } from './supabaseClient'
+import { auth } from './firebase'
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
 
@@ -15,17 +15,18 @@ export const apiClient = axios.create({
   },
 })
 
-// Request interceptor to add auth token
+// Request interceptor to add Firebase auth token
 apiClient.interceptors.request.use(
   async (config) => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-
-    if (session?.access_token) {
-      config.headers.Authorization = `Bearer ${session.access_token}`
+    const user = auth.currentUser
+    if (user) {
+      try {
+        const token = await user.getIdToken()
+        config.headers.Authorization = `Bearer ${token}`
+      } catch (error) {
+        console.error('Error getting Firebase token:', error)
+      }
     }
-
     return config
   },
   (error) => {
@@ -38,8 +39,9 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Token expired or invalid - redirect to login
-      window.location.href = '/login'
+      console.warn('401 Unauthorized error from API')
+      // Could redirect to login here if needed
+      // window.location.href = '/login'
     }
     return Promise.reject(error)
   }

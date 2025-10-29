@@ -9,7 +9,7 @@ interface Alert {
 }
 
 interface DrawerState {
-  [key: string]: boolean
+  [key: string]: boolean | string | any
 }
 
 interface ModalState {
@@ -23,7 +23,7 @@ interface UIContextType {
   dismissAlert: (id: string) => void
   // Drawers
   drawers: DrawerState
-  openDrawer: (name: string) => void
+  openDrawer: (name: string, data?: any) => void
   closeDrawer: (name: string) => void
   toggleDrawer: (name: string) => void
   // Modals
@@ -45,7 +45,8 @@ export function UIProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false)
 
   const showAlert = (message: string, level: AlertLevel = 'info') => {
-    const id = Date.now().toString()
+    // Generate unique ID with timestamp + random number to avoid collisions
+    const id = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
     setAlerts((prev) => [...prev, { message, level, id }])
 
     // Auto-dismiss after 5 seconds
@@ -58,8 +59,8 @@ export function UIProvider({ children }: { children: ReactNode }) {
     setAlerts((prev) => prev.filter((alert) => alert.id !== id))
   }
 
-  const openDrawer = (name: string) => {
-    setDrawers((prev) => ({ ...prev, [name]: true }))
+  const openDrawer = (name: string, data?: any) => {
+    setDrawers((prev) => ({ ...prev, [name]: data !== undefined ? data : true }))
   }
 
   const closeDrawer = (name: string) => {

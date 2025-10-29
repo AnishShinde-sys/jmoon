@@ -1,3 +1,15 @@
+export interface VizSettings {
+  colorOpacity: number
+  colorBy: 'solid' | 'valueBased'
+  blockColor: string
+  labelBy: 'noLabel' | 'blockName' | 'headerValue'
+  labelHeader?: any
+  colorHeader?: any
+  colors?: string[]
+  zoneClassification?: string
+  zoneStops?: number
+}
+
 export interface Farm {
   id: string
   name: string
@@ -8,8 +20,11 @@ export interface Farm {
     longitude: number
   }
   blocksGeoJsonPath?: string
+  vizSettings?: VizSettings
   createdAt: string
   updatedAt: string
+  users?: Array<{ id: string }>
+  permissions?: Record<string, 'Administrator' | 'Editor' | 'Read-only'>
 }
 
 export interface FarmCollaborator {
@@ -22,7 +37,7 @@ export interface FarmCollaborator {
 export interface CreateFarmInput {
   name: string
   description?: string
-  geolocation?: {
+  location?: {
     latitude: number
     longitude: number
   }

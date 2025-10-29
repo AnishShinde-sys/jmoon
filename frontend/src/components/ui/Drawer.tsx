@@ -6,9 +6,10 @@ interface DrawerProps {
   title?: string
   children: ReactNode
   position?: 'left' | 'right'
+  showBackdrop?: boolean
 }
 
-export default function Drawer({ isOpen, onClose, title, children, position = 'right' }: DrawerProps) {
+export default function Drawer({ isOpen, onClose, title, children, position = 'right', showBackdrop = true }: DrawerProps) {
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) {
@@ -27,8 +28,8 @@ export default function Drawer({ isOpen, onClose, title, children, position = 'r
 
   return (
     <>
-      {/* Backdrop */}
-      {isOpen && (
+      {/* Backdrop - only show if enabled */}
+      {isOpen && showBackdrop && (
         <div
           className="fixed inset-0 bg-black bg-opacity-50 z-40 transition-opacity"
           onClick={onClose}
@@ -37,7 +38,8 @@ export default function Drawer({ isOpen, onClose, title, children, position = 'r
 
       {/* Drawer */}
       <div
-        className={`drawer ${positionClasses} ${translateClasses}`}
+        className={`fixed top-0 ${positionClasses} h-full w-full md:w-96 bg-white shadow-xl transform transition-transform duration-300 ease-in-out z-50 ${translateClasses}`}
+        style={{ maxWidth: '400px' }}
       >
         {title && (
           <div className="px-6 py-4 border-b border-gray-200">

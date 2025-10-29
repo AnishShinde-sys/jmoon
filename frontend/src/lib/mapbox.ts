@@ -68,8 +68,9 @@ export class MapService {
   addGeocoder(): MapboxGeocoder | null {
     if (!this.map) return null
 
+    const token = mapboxgl.accessToken || import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || ''
     this.geocoder = new MapboxGeocoder({
-      accessToken: mapboxgl.accessToken,
+      accessToken: token,
       mapboxgl: mapboxgl as any,
       marker: false,
     })

@@ -1,3 +1,4 @@
+// @ts-ignore - turf module resolution issue with bundler
 import * as turf from '@turf/turf'
 
 export const geospatialService = {
