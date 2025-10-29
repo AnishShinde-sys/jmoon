@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Environment variables - NEVER commit real secrets!
 .env
 .env.*
@@ -64,3 +65,12 @@ temp/
 # OS files
 Thumbs.db
 .DS_Store
+=======
+node_modules/
+.env
+.env.local
+.DS_Store
+*.log
+.cache/
+.local/
+>>>>>>> 29df5012095a8e0e399f1adfc6585b867a3604f4
