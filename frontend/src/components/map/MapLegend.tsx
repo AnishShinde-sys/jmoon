@@ -1,80 +1,59 @@
-import { VizSettings } from '@/types/dataset'
+'use client'
 
-interface MapLegendProps {
-  vizSettings: VizSettings
-  visible?: boolean
-  onToggle?: () => void
-}
+import { useMapContext } from '@/context/MapContext'
 
-export default function MapLegend({ vizSettings, visible = true, onToggle }: MapLegendProps) {
-  if (!visible) {
-    return (
-      <div className="absolute bottom-20 right-4 bg-white rounded-lg shadow-lg p-2">
-        <button onClick={onToggle} className="text-gray-600 hover:text-gray-900">
-          Show Legend
-        </button>
-      </div>
-    )
+export default function MapLegend() {
+  const { legend } = useMapContext()
+
+  if (!legend || legend.entries.length === 0) {
+    return null
   }
 
-  const getColorStops = () => {
-    const { zones, min = 0, max = 100 } = vizSettings
-    const colors = zones === 3
-      ? ['rgb(194,82,60)', 'rgb(123,237,0)', 'rgb(11,44,122)']
-      : ['rgb(194,82,60)', 'rgb(240,180,17)', 'rgb(123,237,0)', 'rgb(27,168,124)', 'rgb(11,44,122)']
-
-    const range = max - min
-    const step = range / zones
-
-    return colors.map((color, i) => ({
-      color,
-      min: (min + step * i).toFixed(2),
-      max: (min + step * (i + 1)).toFixed(2),
-    }))
+  const formatValue = (value?: number) => {
+    if (value === undefined) return undefined
+    if (Math.abs(value) >= 1000) {
+      return value.toLocaleString(undefined, { maximumFractionDigits: 0, minimumFractionDigits: 0 })
+    }
+    return value.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 0 })
   }
-
-  const colorStops = getColorStops()
 
   return (
-    <div className="absolute bottom-20 right-4 bg-white rounded-lg shadow-lg p-4 min-w-[200px]">
-      <div className="flex justify-between items-center mb-3">
-        <h3 className="text-sm font-semibold text-gray-900">Legend</h3>
-        {onToggle && (
-          <button
-            onClick={onToggle}
-            className="text-gray-400 hover:text-gray-600 text-xs"
-          >
-            ✕
-          </button>
+    <div className="rounded-lg border border-gray-200 bg-white/95 shadow-lg backdrop-blur px-4 py-3 text-xs text-gray-700 min-w-[180px]">
+      {legend.title && <p className="mb-2 text-sm font-semibold text-gray-900">{legend.title}</p>}
+      <div className="space-y-2">
+        {legend.mode === 'range' && legend.min !== undefined && legend.max !== undefined ? (
+          <div className="space-y-1">
+            {legend.entries.map((entry, index) => (
+              <div key={`${entry.color}-${index}`} className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: entry.color }} />
+                  <span>{entry.label}</span>
+                </div>
+                <div className="text-[10px] text-gray-500">
+                  {formatValue(entry.min)} – {formatValue(entry.max)}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : legend.mode === 'category' ? (
+          <div className="space-y-1">
+            {legend.entries.map((entry, index) => (
+              <div key={`${entry.color}-${index}`} className="flex items-center gap-2">
+                <span className="inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: entry.color }} />
+                <span>{entry.label}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: legend.entries[0].color }} />
+            <span>{legend.entries[0].label}</span>
+          </div>
         )}
       </div>
-
-      {vizSettings.header && (
-        <p className="text-xs text-gray-600 mb-3">{vizSettings.header}</p>
+      {legend.mode === 'range' && legend.min !== undefined && legend.max !== undefined && (
+        <p className="mt-3 text-[10px] text-gray-400">Min: {formatValue(legend.min)} • Max: {formatValue(legend.max)}</p>
       )}
-
-      <div className="space-y-2">
-        {colorStops.map((stop, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <div
-              className="w-6 h-6 rounded border border-gray-300"
-              style={{ backgroundColor: stop.color }}
-            />
-            <span className="text-xs text-gray-700">
-              {stop.min} - {stop.max}
-            </span>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-3 pt-3 border-t border-gray-200">
-        <p className="text-xs text-gray-500">
-          Classification: {vizSettings.classification}
-        </p>
-        <p className="text-xs text-gray-500">
-          Zones: {vizSettings.zones}
-        </p>
-      </div>
     </div>
   )
 }

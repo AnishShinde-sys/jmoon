@@ -2,14 +2,17 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { BellIcon, MegaphoneIcon, UserCircleIcon } from '@heroicons/react/24/outline'
+
+import CreateFarmModal from '@/components/farm/CreateFarmModal'
+import FirstFarmModal from '@/components/farm/FirstFarmModal'
+import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import { useAuth } from '@/context/AuthContext'
 import { useUI } from '@/context/UIContext'
-import { Farm, CreateFarmInput } from '@/types/farm'
 import apiClient from '@/lib/apiClient'
-import CreateFarmModal from '@/components/farm/CreateFarmModal'
-import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Farm, CreateFarmInput } from '@/types/farm'
 
 interface PendingInvitation {
   email: string
@@ -26,8 +29,10 @@ export default function DashboardPage() {
   const [invitations, setInvitations] = useState<PendingInvitation[]>([])
   const [loading, setLoading] = useState(true)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
+  const [showFirstFarmModal, setShowFirstFarmModal] = useState(false)
+  const [firstFarmPrompted, setFirstFarmPrompted] = useState(false)
   const { user, signOut } = useAuth()
-  const { showAlert } = useUI()
+  const { showAlert, openDrawer, openModal } = useUI()
   const router = useRouter()
 
   useEffect(() => {
@@ -40,6 +45,14 @@ export default function DashboardPage() {
       setLoading(true)
       const response = await apiClient.get('/api/farms')
       setFarms(response.data)
+      if (response.data.length === 0) {
+        if (!firstFarmPrompted) {
+          setShowFirstFarmModal(true)
+        }
+      } else {
+        setShowFirstFarmModal(false)
+        setFirstFarmPrompted(true)
+      }
     } catch (error: any) {
       showAlert(error.response?.data?.message || 'Failed to load farms', 'error')
     } finally {
@@ -91,9 +104,22 @@ export default function DashboardPage() {
       await apiClient.post('/api/farms', data)
       await loadFarms()
       setIsCreateModalOpen(false)
+      setFirstFarmPrompted(true)
+      setShowFirstFarmModal(false)
     } catch (error: any) {
       throw error // Let the modal handle the error display
     }
+  }
+
+  const handleDismissFirstFarmModal = () => {
+    setShowFirstFarmModal(false)
+    setFirstFarmPrompted(true)
+  }
+
+  const handleOpenCreateFromFirst = () => {
+    setFirstFarmPrompted(true)
+    setShowFirstFarmModal(false)
+    setIsCreateModalOpen(true)
   }
 
   return (
@@ -104,8 +130,29 @@ export default function DashboardPage() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
             <div className="flex justify-between items-center">
               <h1 className="text-2xl font-bold text-gray-900">Budbase</h1>
-              <div className="flex items-center gap-4">
-                <span className="text-sm text-gray-600">{user?.email}</span>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => openDrawer('notifications')}
+                  className="inline-flex items-center justify-center rounded-full border border-gray-200 p-2 text-gray-600 hover:bg-gray-50"
+                  title="Notifications"
+                >
+                  <BellIcon className="h-5 w-5" />
+                </button>
+                <button
+                  onClick={() => openDrawer('userDetails')}
+                  className="inline-flex items-center justify-center rounded-full border border-gray-200 p-2 text-gray-600 hover:bg-gray-50"
+                  title="Account"
+                >
+                  <UserCircleIcon className="h-5 w-5" />
+                </button>
+                <button
+                  onClick={() => openModal('feedback')}
+                  className="inline-flex items-center justify-center rounded-full border border-gray-200 p-2 text-gray-600 hover:bg-gray-50"
+                  title="Send Feedback"
+                >
+                  <MegaphoneIcon className="h-5 w-5" />
+                </button>
+                <span className="hidden sm:inline text-sm text-gray-600">{user?.email}</span>
                 <Button onClick={handleSignOut} variant="secondary">
                   Sign Out
                 </Button>
@@ -214,6 +261,12 @@ export default function DashboardPage() {
           isOpen={isCreateModalOpen}
           onClose={() => setIsCreateModalOpen(false)}
           onSubmit={handleCreateFarm}
+        />
+        <FirstFarmModal
+          isOpen={showFirstFarmModal}
+          onCreate={handleOpenCreateFromFirst}
+          onDismiss={handleDismissFirstFarmModal}
+          onSignOut={handleSignOut}
         />
       </div>
     </ProtectedRoute>

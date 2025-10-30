@@ -1,11 +1,12 @@
 "use client"
 
-import { useMemo } from 'react'
-import { CalendarIcon, DocumentArrowDownIcon, MapIcon, UserIcon } from '@heroicons/react/24/outline'
+import { useMemo, useState } from 'react'
+import { CalendarIcon, DocumentArrowDownIcon, MapIcon, UserIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
 
 import Drawer from '@/components/ui/Drawer'
 import { useUI } from '@/context/UIContext'
 import { Dataset } from '@/types/dataset'
+import apiClient from '@/lib/apiClient'
 
 const DRAWER_NAME = 'datasetDetails'
 
@@ -18,6 +19,30 @@ export default function DatasetDetailsDrawer() {
   const { drawers, closeDrawer, openDrawer, showAlert } = useUI()
 
   const dataset = (drawers[DRAWER_NAME] as DrawerState | Dataset | undefined) as Dataset | undefined
+
+  const [rebuilding, setRebuilding] = useState(false)
+
+  const processingLabel = useMemo(() => {
+    const status = dataset?.processing?.status
+    if (!status) return null
+    switch (status) {
+      case 'pending':
+        return 'Awaiting rebuild'
+      case 'processing':
+        return 'Rebuilding from collector'
+      case 'completed':
+        return 'Up to date'
+      case 'failed':
+        return 'Rebuild failed'
+      default:
+        return null
+    }
+  }, [dataset?.processing?.status])
+
+  const processingUpdatedAt = useMemo(() => {
+    if (!dataset?.processing?.updatedAt) return null
+    return new Date(dataset.processing.updatedAt)
+  }, [dataset?.processing?.updatedAt])
 
   const createdAt = useMemo(() => {
     if (!dataset?.createdAt) return null
@@ -47,7 +72,7 @@ export default function DatasetDetailsDrawer() {
     if (!dataset) return
 
     window.dispatchEvent(new CustomEvent('launchDataset', { detail: dataset }))
-    showAlert('Dataset launch events are wired. Hook up the handler in MapContext to finish the flow.', 'info')
+    showAlert(`Launching “${dataset.name}” on the map.`, 'success')
   }
 
   const handleDownload = () => {
@@ -71,6 +96,32 @@ export default function DatasetDetailsDrawer() {
       collectorId: dataset.collectorId,
       dataset,
     })
+  }
+
+  const handleRebuildDataset = async () => {
+    if (!dataset) return
+    if (!dataset.collectorId) {
+      showAlert('Link this dataset to a collector before rebuilding.', 'info')
+      return
+    }
+
+    setRebuilding(true)
+    try {
+      showAlert(`Rebuilding “${dataset.name}” from collector data…`, 'info')
+      const response = await apiClient.post(`/api/farms/${dataset.farmId}/datasets/${dataset.id}/rebuild`)
+      const rebuilt = response.data as Dataset
+
+      showAlert('Dataset rebuilt with the latest collector data.', 'success')
+      window.dispatchEvent(new CustomEvent('datasetRecompiled', { detail: { dataset: rebuilt } }))
+      window.dispatchEvent(new CustomEvent('datasets:refresh', { detail: { farmId: dataset.farmId } }))
+      window.dispatchEvent(new CustomEvent('collectors:refresh', { detail: { farmId: dataset.farmId } }))
+      openDrawer(DRAWER_NAME, rebuilt)
+    } catch (error: any) {
+      const message = error?.response?.data?.message || 'Failed to rebuild dataset'
+      showAlert(message, 'error')
+    } finally {
+      setRebuilding(false)
+    }
   }
 
   return (
@@ -126,6 +177,27 @@ export default function DatasetDetailsDrawer() {
             </div>
           </div>
 
+          {dataset.dynamic && (
+            <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+              <p className="font-semibold text-blue-900">Linked Data Collector</p>
+              <p className="mt-1 text-blue-700/80">
+                Updates gathered via collector <span className="font-semibold">{dataset.collectorId}</span> can be merged into this
+                dataset after a rebuild.
+              </p>
+            </div>
+          )}
+
+          {processingLabel && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <p className="font-semibold text-amber-900">Processing Status</p>
+              <p className="mt-1">{processingLabel}</p>
+              {dataset.processing?.message && <p className="mt-1 text-amber-700/90">{dataset.processing.message}</p>}
+              {processingUpdatedAt && (
+                <p className="mt-1 text-amber-700/70">Updated {processingUpdatedAt.toLocaleString()}</p>
+              )}
+            </div>
+          )}
+
           <div className="border-t border-gray-200 pt-4 space-y-2">
             <button
               onClick={handleLaunchDataset}
@@ -141,6 +213,16 @@ export default function DatasetDetailsDrawer() {
               <DocumentArrowDownIcon className="w-5 h-5" />
               Download Source File
             </button>
+            {dataset.collectorId && (
+              <button
+                onClick={handleRebuildDataset}
+                disabled={rebuilding}
+                className="w-full btn btn-secondary flex items-center justify-center gap-2 disabled:opacity-70"
+              >
+                <ArrowPathIcon className={`w-5 h-5 ${rebuilding ? 'animate-spin' : ''}`} />
+                {rebuilding ? 'Rebuilding…' : 'Rebuild from Collector'}
+              </button>
+            )}
             {dataset.collectorId && (
               <button
                 onClick={handleOpenCollector}

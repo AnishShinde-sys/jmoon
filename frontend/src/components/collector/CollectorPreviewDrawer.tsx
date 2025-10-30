@@ -70,7 +70,7 @@ export default function CollectorPreviewDrawer({ farmId }: { farmId: string }) {
     }
 
     window.dispatchEvent(new CustomEvent('launchCollector', { detail: { collector, dataset } }))
-    showAlert('Collector launch event dispatched. Wire up listeners in MapContext to complete the feature.', 'info')
+    showAlert('Collector workflow launched. Use the form drawer to capture new data points.', 'success')
   }
 
   return (

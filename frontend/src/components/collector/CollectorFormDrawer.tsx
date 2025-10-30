@@ -8,8 +8,15 @@ import { useUI } from '@/context/UIContext'
 import { useAuth } from '@/context/AuthContext'
 import apiClient from '@/lib/apiClient'
 import { Collector, CollectorField, CreateDataPointInput } from '@/types/collector'
+import { Dataset } from '@/types/dataset'
 
 const DRAWER_NAME = 'collector'
+
+interface CollectorDrawerState {
+  collector?: Collector
+  farmId?: string
+  dataset?: { id: string; name: string }
+}
 
 interface CollectorFormDrawerProps {}
 
@@ -23,9 +30,10 @@ export default function CollectorFormDrawer({}: CollectorFormDrawerProps) {
   const [locationAccuracy, setLocationAccuracy] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
 
-  const drawerState = drawers[DRAWER_NAME] as any
+  const drawerState = drawers[DRAWER_NAME] as CollectorDrawerState | undefined
   const isOpen = Boolean(drawerState)
   const farmId = drawerState?.farmId
+  const linkedDataset = drawerState?.dataset
 
   useEffect(() => {
     if (isOpen && drawerState?.collector) {
@@ -109,6 +117,21 @@ export default function CollectorFormDrawer({}: CollectorFormDrawerProps) {
 
       await apiClient.post(`/api/farms/${farmId}/collectors/${collector.id}/datapoints`, input)
       showAlert('Data point saved successfully', 'success')
+
+      if (linkedDataset) {
+        try {
+          showAlert(`Refreshing “${linkedDataset.name}” with the latest readings…`, 'info')
+          const rebuildResponse = await apiClient.post(`/api/farms/${farmId}/datasets/${linkedDataset.id}/rebuild`)
+          const rebuiltDataset = rebuildResponse.data as Dataset
+          window.dispatchEvent(new CustomEvent('datasetRecompiled', { detail: { dataset: rebuiltDataset } }))
+          window.dispatchEvent(new CustomEvent('datasets:refresh', { detail: { farmId } }))
+          window.dispatchEvent(new CustomEvent('collectors:refresh', { detail: { farmId } }))
+          showAlert(`“${linkedDataset.name}” is up to date with the newest data points.`, 'success')
+        } catch (rebuildError: any) {
+          const message = rebuildError?.response?.data?.message || 'Dataset rebuild failed'
+          showAlert(message, 'warning')
+        }
+      }
       
       // Reset form
       const resetData: Record<string, any> = {}
@@ -236,6 +259,15 @@ export default function CollectorFormDrawer({}: CollectorFormDrawerProps) {
             <p className="text-sm text-gray-600">{collector.description}</p>
           )}
 
+          {linkedDataset && (
+            <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+              <p className="font-semibold text-blue-900">Linked Dataset</p>
+              <p className="mt-1 text-blue-700/80">
+                Data points will automatically rebuild “{linkedDataset.name}”.
+              </p>
+            </div>
+          )}
+ 
           <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
             <div className="flex items-center gap-2 text-xs">
               <MapPinIcon className="h-4 w-4" />

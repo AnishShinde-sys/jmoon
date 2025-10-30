@@ -2,7 +2,13 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { AdjustmentsHorizontalIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
+import {
+  AdjustmentsHorizontalIcon,
+  BellIcon,
+  ChevronRightIcon,
+  MegaphoneIcon,
+  UserCircleIcon,
+} from '@heroicons/react/24/outline'
 import bbox from '@turf/bbox'
 
 import CreateBlockDrawer from '@/components/blocks/CreateBlockDrawer'
@@ -19,6 +25,7 @@ import CollectorsDrawer from '@/components/collector/CollectorsDrawer'
 import CreateCollectorModal from '@/components/collector/CreateCollectorModal'
 import CollectorFormDrawer from '@/components/collector/CollectorFormDrawer'
 import DataPointDetailsDrawer from '@/components/collector/DataPointDetailsDrawer'
+import { Collector } from '@/types/collector'
 import CollaboratorsDrawer from '@/components/farm/CollaboratorsDrawer'
 import FarmDetailsDrawer from '@/components/farm/FarmDetailsDrawer'
 import FarmSettingsDrawer from '@/components/farm/FarmSettingsDrawer'
@@ -26,6 +33,8 @@ import FarmSidebar from '@/components/farm/FarmSidebar'
 import DrawingToolbar from '@/components/map/DrawingToolbar'
 import MapContainer from '@/components/map/MapContainer'
 import MapLayersDrawer from '@/components/map/MapLayersDrawer'
+import MapLegend from '@/components/map/MapLegend'
+import TerrainToggle from '@/components/map/TerrainToggle'
 import { useUI } from '@/context/UIContext'
 import { useMapContext } from '@/context/MapContext'
 import { useBlocks } from '@/hooks/useBlocks'
@@ -40,7 +49,7 @@ interface FarmPageClientProps {
 
 export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientProps) {
   const router = useRouter()
-  const { showAlert, openDrawer, closeDrawer, drawers } = useUI()
+  const { showAlert, openDrawer, closeDrawer, drawers, openModal } = useUI()
   const { map, draw } = useMapContext()
   const { blocksGeoJSON: blocksJSONFromHook } = useBlocks(farmId)
 
@@ -118,14 +127,81 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
     }
   }, [map, draw, openDrawer, closeDrawer])
 
-  // Handle dataset routes (TODO: implement dataset launch parity with legacy Vue app)
   useEffect(() => {
-    if (layerType === 'dataset' && layerId) {
-      openDrawer('datasets')
-      // Legacy Vue app would load the dataset and launch it on the map here.
-      // TODO: replicate dataset launch behaviour (see Budbase_old/legacy-vue Farm.vue checkRoutes()).
+    const handleLaunchCollector = (event: Event) => {
+      const detail = (event as CustomEvent<{ collector: Collector; dataset?: { id: string; name: string } }>).detail
+      if (!detail?.collector) {
+        showAlert('Collector payload missing.', 'error')
+        return
+      }
+
+      openDrawer('collector', {
+        collector: detail.collector,
+        farmId,
+        dataset: detail.dataset,
+      })
+      showAlert(`Collecting data with “${detail.collector.name}”.`, 'success')
     }
-  }, [layerType, layerId, openDrawer])
+
+    window.addEventListener('launchCollector', handleLaunchCollector as EventListener)
+    return () => {
+      window.removeEventListener('launchCollector', handleLaunchCollector as EventListener)
+    }
+  }, [farmId, openDrawer, showAlert])
+
+  // Handle dataset routes to auto-launch shared datasets
+  useEffect(() => {
+    if (layerType !== 'dataset' || !layerId || !farmId) {
+      return
+    }
+
+    let cancelled = false
+
+    const launchFromRoute = async () => {
+      try {
+        const response = await apiClient.get(`/api/datasets/${layerId}`, {
+          params: { farmId },
+        })
+
+        if (cancelled) return
+
+        const dataset = response.data
+
+        window.dispatchEvent(
+          new CustomEvent('clearDatasetLayers', {
+            detail: { datasetId: dataset.id },
+          })
+        )
+
+        window.dispatchEvent(
+          new CustomEvent('launchDataset', {
+            detail: {
+              dataset,
+              options: {
+                autoZoom: true,
+                clearExistingLayers: true,
+                openDetails: true,
+              },
+            },
+          })
+        )
+
+        openDrawer('datasetDetails', dataset)
+        showAlert(`Launching “${dataset.name}” on the map.`, 'success')
+      } catch (error: any) {
+        if (!cancelled) {
+          console.error('Failed to launch dataset from route:', error)
+          showAlert(error?.response?.data?.message || 'Failed to load dataset from link', 'error')
+        }
+      }
+    }
+
+    launchFromRoute()
+
+    return () => {
+      cancelled = true
+    }
+  }, [layerType, layerId, farmId, openDrawer, showAlert])
 
   const startDrawing = () => {
     if (!draw) return
@@ -285,12 +361,35 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
         </MapContainer>
 
         <div className="absolute top-24 right-6 z-40 flex flex-col items-end gap-2">
+          <TerrainToggle />
           <button
             onClick={() => openDrawer('mapLayers')}
             className="flex items-center gap-2 rounded-md bg-white/90 px-3 py-2 text-sm font-medium text-gray-700 shadow-md transition hover:bg-white"
           >
             <AdjustmentsHorizontalIcon className="h-4 w-4" /> Layers &amp; Terrain
           </button>
+          <button
+            onClick={() => openDrawer('notifications')}
+            className="flex items-center gap-2 rounded-md bg-white/90 px-3 py-2 text-sm font-medium text-gray-700 shadow-md transition hover:bg-white"
+          >
+            <BellIcon className="h-4 w-4" /> Notifications
+          </button>
+          <button
+            onClick={() => openDrawer('userDetails')}
+            className="flex items-center gap-2 rounded-md bg-white/90 px-3 py-2 text-sm font-medium text-gray-700 shadow-md transition hover:bg-white"
+          >
+            <UserCircleIcon className="h-4 w-4" /> Account
+          </button>
+          <button
+            onClick={() => openModal('feedback')}
+            className="flex items-center gap-2 rounded-md bg-white/90 px-3 py-2 text-sm font-medium text-gray-700 shadow-md transition hover:bg-white"
+          >
+            <MegaphoneIcon className="h-4 w-4" /> Feedback
+          </button>
+        </div>
+
+        <div className="pointer-events-auto absolute bottom-6 left-6 z-40">
+          <MapLegend />
         </div>
 
         {!sidebarOpen && (

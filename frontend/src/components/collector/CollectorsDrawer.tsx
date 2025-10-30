@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from 'react'
-import { PlusIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline'
+import { PlusIcon, WrenchScrewdriverIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
 
 import Drawer from '@/components/ui/Drawer'
 import { useUI } from '@/context/UIContext'
@@ -49,6 +49,20 @@ export default function CollectorsDrawer({ farmId, farmOwnerId }: CollectorsDraw
       fetchCollectors()
     }
   }, [isOpen, fetchCollectors])
+
+  useEffect(() => {
+    const handleRefresh = (event: Event) => {
+      const detail = (event as CustomEvent<{ farmId?: string }>).detail
+      if (!detail?.farmId || detail.farmId === farmId) {
+        fetchCollectors()
+      }
+    }
+
+    window.addEventListener('collectors:refresh', handleRefresh as EventListener)
+    return () => {
+      window.removeEventListener('collectors:refresh', handleRefresh as EventListener)
+    }
+  }, [farmId, fetchCollectors])
 
   const handleCreateCollector = () => {
     openDrawer('createCollector', { farmId })
@@ -121,6 +135,11 @@ export default function CollectorsDrawer({ farmId, farmOwnerId }: CollectorsDraw
                   <p className="mt-2 text-xs text-gray-500">
                     {collector.fields.length} field{collector.fields.length !== 1 ? 's' : ''}
                   </p>
+                  {collector.reCompile && (
+                    <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                      <ArrowPathIcon className="h-3 w-3" /> Needs rebuild
+                    </span>
+                  )}
                 </div>
                 {editMode && canManage && (
                   <div className="mt-3 border-t border-gray-100 pt-3">

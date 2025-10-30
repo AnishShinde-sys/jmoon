@@ -1,4 +1,0 @@
-{
-  "/(dashboard)/(converted)/farm/[[...params]]/page": "app/(dashboard)/(converted)/farm/[[...params]]/page.js",
-  "/(dashboard)/(converted)/dashboard/page": "app/(dashboard)/(converted)/dashboard/page.js"
-}

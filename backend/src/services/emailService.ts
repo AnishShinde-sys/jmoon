@@ -98,3 +98,61 @@ export async function sendSignupInvitation(
   }
 }
 
+interface FeedbackEmailOptions {
+  fromEmail: string
+  message: string
+  pageUrl?: string
+  farmId?: string
+  userName?: string
+}
+
+export async function sendFeedbackEmail({ fromEmail, message, pageUrl, farmId, userName }: FeedbackEmailOptions) {
+  const supportEmail = process.env.FEEDBACK_EMAIL || process.env.SUPPORT_EMAIL || process.env.SMTP_FROM
+
+  if (!supportEmail) {
+    throw new Error('Support email not configured')
+  }
+
+  const subject = `[Budbase Feedback] ${userName || fromEmail}`
+
+  const details: string[] = []
+  if (farmId) {
+    details.push(`<li><strong>Farm ID:</strong> ${farmId}</li>`)
+  }
+  if (pageUrl) {
+    details.push(`<li><strong>Page URL:</strong> ${pageUrl}</li>`)
+  }
+
+  const detailList = details.length > 0 ? `<ul>${details.join('')}</ul>` : ''
+
+  const mailOptions = {
+    from: process.env.SMTP_FROM || fromEmail,
+    to: supportEmail,
+    replyTo: fromEmail,
+    subject,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #6e59c7;">New Feedback Submission</h2>
+        <p><strong>From:</strong> ${userName ? `${userName} &lt;${fromEmail}&gt;` : fromEmail}</p>
+        ${detailList}
+        <p style="white-space: pre-wrap; border-left: 4px solid #6e59c7; padding-left: 12px; margin-top: 20px;">${message}</p>
+      </div>
+    `,
+    text: `Feedback from ${userName ? `${userName} <${fromEmail}>` : fromEmail}
+
+${farmId ? `Farm ID: ${farmId}\n` : ''}${pageUrl ? `Page URL: ${pageUrl}\n` : ''}
+
+${message}
+    `,
+  }
+
+  try {
+    const info = await transporter.sendMail(mailOptions)
+    console.log('Feedback email sent:', info.messageId)
+    return { success: true, messageId: info.messageId }
+  } catch (error) {
+    console.error('Error sending feedback email:', error)
+    throw error
+  }
+}
+

@@ -42,20 +42,42 @@ export function useDatasets(farmId: string, folderId: string = 'root') {
     return response.data
   }
 
-  const updateDataset = async (datasetId: string, input: UpdateDatasetInput): Promise<Dataset> => {
-    const response = await apiClient.put(`/api/datasets/${datasetId}`, input)
+  const updateDataset = async (
+    datasetId: string,
+    input: UpdateDatasetInput,
+    options?: { revisionMessage?: string }
+  ): Promise<Dataset> => {
+    const payload: UpdateDatasetInput & { revisionMessage?: string } = {
+      ...input,
+    }
+
+    if (options?.revisionMessage) {
+      payload.revisionMessage = options.revisionMessage
+    }
+
+    const response = await apiClient.put(`/api/datasets/${datasetId}`, payload, {
+      params: { farmId },
+    })
     const updated = response.data
     setDatasets((prev) => prev.map((d) => (d.id === datasetId ? updated : d)))
     return updated
   }
 
   const deleteDataset = async (datasetId: string): Promise<void> => {
-    await apiClient.delete(`/api/datasets/${datasetId}`)
+    await apiClient.delete(`/api/datasets/${datasetId}`, {
+      params: { farmId },
+    })
     setDatasets((prev) => prev.filter((d) => d.id !== datasetId))
   }
 
   const copyDataset = async (datasetId: string, newName: string) => {
-    const response = await apiClient.post(`/api/datasets/${datasetId}/copy`, { newName })
+    const response = await apiClient.post(
+      `/api/datasets/${datasetId}/copy`,
+      { newName },
+      {
+        params: { farmId },
+      }
+    )
     await fetchDatasets()
     return response.data
   }
@@ -63,6 +85,20 @@ export function useDatasets(farmId: string, folderId: string = 'root') {
   useEffect(() => {
     fetchDatasets()
   }, [fetchDatasets])
+
+  useEffect(() => {
+    const handleRefresh = (event: Event) => {
+      const detail = (event as CustomEvent<{ farmId?: string }>).detail
+      if (!detail?.farmId || detail.farmId === farmId) {
+        fetchDatasets()
+      }
+    }
+
+    window.addEventListener('datasets:refresh', handleRefresh as EventListener)
+    return () => {
+      window.removeEventListener('datasets:refresh', handleRefresh as EventListener)
+    }
+  }, [farmId, fetchDatasets])
 
   return {
     datasets,

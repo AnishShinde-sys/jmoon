@@ -3,7 +3,8 @@ import { v4 as uuidv4 } from 'uuid'
 import multer from 'multer'
 import { authenticate, AuthRequest } from '../middleware/auth'
 import { gcsClient } from '../services/gcsClient'
-import { Farm, Dataset, CreateDatasetInput, DatasetFolder, DatasetRevision } from '../types'
+import { notifyUsers } from '../services/notificationService'
+import { Farm, Dataset, CreateDatasetInput, DatasetFolder, DatasetRevision, Collector, DataPoint, GeoJSON } from '../types'
 import { processFile, detectFileType, ProcessingResult } from '../services/fileProcessor'
 
 const router = Router()
@@ -61,6 +62,31 @@ function userHasWriteAccess(farm: Farm, userId: string): boolean {
   return false
 }
 
+function gatherDatasetRecipients(farm: Farm, dataset?: Dataset | null, collector?: Collector | null) {
+  const recipients = new Set<string>()
+  if (dataset) {
+    if (dataset.createdBy) recipients.add(dataset.createdBy)
+    if ((dataset as any).updatedBy) recipients.add((dataset as any).updatedBy)
+    if ((dataset as any).ownerId) recipients.add((dataset as any).ownerId)
+    if (Array.isArray((dataset as any).editors)) {
+      ;((dataset as any).editors as string[]).forEach((id) => id && recipients.add(id))
+    }
+    if (Array.isArray((dataset as any).collaborators)) {
+      ;((dataset as any).collaborators as Array<{ userId?: string }>).forEach((collaborator) => {
+        if (collaborator?.userId) recipients.add(collaborator.userId)
+      })
+    }
+  }
+  if (collector && collector.createdBy) recipients.add(collector.createdBy)
+  if (farm.owner) recipients.add(farm.owner)
+  farm.collaborators?.forEach((collaborator) => {
+    if (collaborator.role !== 'viewer') {
+      recipients.add(collaborator.userId)
+    }
+  })
+  return Array.from(recipients)
+}
+
 async function readDatasetFolders(farmId: string): Promise<DatasetFolder[]> {
   const path = getDatasetFoldersPath(farmId)
   const exists = await gcsClient.exists(path)
@@ -79,6 +105,94 @@ async function readDatasetFolders(farmId: string): Promise<DatasetFolder[]> {
 async function writeDatasetFolders(farmId: string, folders: DatasetFolder[]): Promise<void> {
   const path = getDatasetFoldersPath(farmId)
   await gcsClient.writeJSON(path, folders)
+}
+
+function computeBoundsFromPointFeatures(
+  features: GeoJSON.Feature<GeoJSON.Point, any>[]
+): [number, number, number, number] | undefined {
+  if (!features.length) {
+    return undefined
+  }
+
+  let minLon = Infinity
+  let minLat = Infinity
+  let maxLon = -Infinity
+  let maxLat = -Infinity
+
+  for (const feature of features) {
+    const coordinates = feature.geometry?.coordinates
+    if (!Array.isArray(coordinates) || coordinates.length < 2) {
+      continue
+    }
+    const [lon, lat] = coordinates
+    if (typeof lon !== 'number' || typeof lat !== 'number' || Number.isNaN(lon) || Number.isNaN(lat)) {
+      continue
+    }
+    if (lon < minLon) minLon = lon
+    if (lat < minLat) minLat = lat
+    if (lon > maxLon) maxLon = lon
+    if (lat > maxLat) maxLat = lat
+  }
+
+  if (!Number.isFinite(minLon) || !Number.isFinite(minLat) || !Number.isFinite(maxLon) || !Number.isFinite(maxLat)) {
+    return undefined
+  }
+
+  return [minLon, minLat, maxLon, maxLat]
+}
+
+function buildGeoJSONFromDataPoints(
+  dataPoints: DataPoint[],
+  collector: Collector
+): {
+  featureCollection: GeoJSON.FeatureCollection<GeoJSON.Point>
+  fields: string[]
+  bounds?: [number, number, number, number]
+} {
+  const ignoredKeys = new Set(['id', 'collectorId', 'geolocation', 'createdAt', 'updatedAt', 'createdBy'])
+  const fieldNames = new Set<string>()
+  ;(collector.fields || []).forEach((field) => fieldNames.add(field.machine_name))
+
+  const features: GeoJSON.Feature<GeoJSON.Point, any>[] = dataPoints.map((dataPoint) => {
+    const { geolocation, id, collectorId, createdAt, updatedAt, createdBy, ...rest } = dataPoint
+    const coordinates: [number, number] = [geolocation.longitude, geolocation.latitude]
+
+    const properties: Record<string, any> = {
+      id,
+      collectorId,
+      createdAt,
+      updatedAt,
+      createdBy,
+    }
+
+    Object.entries(rest).forEach(([key, value]) => {
+      if (!ignoredKeys.has(key)) {
+        properties[key] = value
+        fieldNames.add(key)
+      }
+    })
+
+    return {
+      type: 'Feature',
+      id,
+      geometry: {
+        type: 'Point',
+        coordinates,
+      },
+      properties,
+    }
+  })
+
+  const bounds = computeBoundsFromPointFeatures(features)
+
+  return {
+    featureCollection: {
+      type: 'FeatureCollection',
+      features,
+    },
+    fields: Array.from(fieldNames),
+    bounds,
+  }
 }
 
 async function appendDatasetRevision(
@@ -322,6 +436,11 @@ router.post(
             folderId,
             columnMapping,
             originalHeaders,
+            dynamic: Boolean(input.collectorId),
+            processing: {
+              status: 'completed',
+              updatedAt: now,
+            },
           }
           
           const metadataPath = `farms/${farmId}/datasets/${datasetId}/metadata.json`
@@ -376,6 +495,12 @@ router.post(
         folderId,
         columnMapping,
         originalHeaders,
+        dynamic: Boolean(input.collectorId),
+        processing: {
+          status: processingResult ? 'completed' : 'failed',
+          updatedAt: now,
+          ...(processingResult ? {} : { message: 'Automatic processing failed' }),
+        },
       }
 
       // Save metadata
@@ -468,6 +593,168 @@ router.get('/datasets/:datasetId', authenticate, async (req: AuthRequest, res) =
     res.status(500).json({
       error: 'InternalError',
       message: 'Failed to fetch dataset',
+    })
+  }
+})
+
+router.post('/farms/:farmId/datasets/:datasetId/rebuild', authenticate, async (req: AuthRequest, res) => {
+  const userId = req.user!.id
+  const { farmId, datasetId } = req.params
+
+  let dataset: Dataset | null = null
+  let farm: Farm | null = null
+
+  try {
+    farm = await checkFarmAccess(farmId, userId)
+    if (!farm) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Farm not found or access denied',
+      })
+    }
+
+    if (!userHasWriteAccess(farm, userId)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'You do not have permission to update datasets for this farm',
+      })
+    }
+
+    const metadataPath = `farms/${farmId}/datasets/${datasetId}/metadata.json`
+    const exists = await gcsClient.exists(metadataPath)
+
+    if (!exists) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Dataset not found',
+      })
+    }
+
+    dataset = await gcsClient.readJSON<Dataset>(metadataPath)
+
+    if (!dataset.collectorId) {
+      return res.status(400).json({
+        error: 'ValidationError',
+        message: 'Dataset is not linked to a collector',
+      })
+    }
+
+    const collectorId = dataset.collectorId
+    const collectorPath = `farms/${farmId}/collectors/${collectorId}/metadata.json`
+    const collectorExists = await gcsClient.exists(collectorPath)
+
+    if (!collectorExists) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Linked collector not found',
+      })
+    }
+
+    const collector = await gcsClient.readJSON<Collector>(collectorPath)
+
+    const now = new Date().toISOString()
+    dataset.dynamic = true
+    dataset.processing = {
+      status: 'processing',
+      updatedAt: now,
+      message: 'Rebuilding dataset from collector data',
+    }
+    dataset.updatedAt = now
+    await gcsClient.writeJSON(metadataPath, dataset)
+
+    const dataPointsPath = `farms/${farmId}/collectors/${collectorId}/datapoints.json`
+    const dataPointsExist = await gcsClient.exists(dataPointsPath)
+    const dataPoints = dataPointsExist ? await gcsClient.readJSON<DataPoint[]>(dataPointsPath) : []
+
+    const { featureCollection, fields, bounds } = buildGeoJSONFromDataPoints(dataPoints, collector)
+    const geojsonPath = `farms/${farmId}/datasets/${datasetId}/processed.geojson`
+    await gcsClient.writeJSON(geojsonPath, featureCollection)
+
+    dataset.status = 'completed'
+    dataset.processing = {
+      status: 'completed',
+      updatedAt: now,
+      message: 'Dataset rebuilt with the latest collector data.',
+    }
+    dataset.processedAt = now
+    dataset.updatedAt = now
+    dataset.recordCount = featureCollection.features.length
+    dataset.fields = fields
+    dataset.bounds = bounds
+    dataset.geojsonPath = geojsonPath
+    dataset.dynamic = true
+
+    await gcsClient.writeJSON(metadataPath, dataset)
+
+    collector.datasetId = datasetId
+    collector.reCompile = false
+    collector.updatedAt = now
+    await gcsClient.writeJSON(collectorPath, collector)
+
+    const recipients = gatherDatasetRecipients(farm, dataset, collector).filter((id) => id && id !== userId)
+    if (recipients.length > 0) {
+      await notifyUsers(recipients, {
+        message: `"${dataset.name}" has been rebuilt with the latest readings from ${
+          collector.name ?? 'the linked collector'
+        }.`,
+        type: 'success',
+        url: `/app/farm/${farmId}?drawer=datasets&datasetId=${datasetId}`,
+        metadata: {
+          farmId,
+          datasetId,
+          collectorId,
+          status: 'completed',
+          updatedAt: now,
+        },
+      })
+    }
+
+    res.json({
+      ...dataset,
+      geojson: featureCollection,
+    })
+  } catch (error: any) {
+    console.error('Error rebuilding dataset from collector:', error)
+
+    if (dataset) {
+      try {
+        const failureUpdatedAt = new Date().toISOString()
+        dataset.processing = {
+          status: 'failed',
+          updatedAt: failureUpdatedAt,
+          message: 'Failed to rebuild dataset from collector data',
+        }
+        dataset.status = 'failed'
+        await gcsClient.writeJSON(`farms/${farmId}/datasets/${datasetId}/metadata.json`, dataset)
+
+        if (!farm) {
+          farm = await checkFarmAccess(farmId, userId)
+        }
+        const recipients = farm
+          ? gatherDatasetRecipients(farm, dataset, undefined).filter((id) => id && id !== userId)
+          : []
+        if (recipients.length > 0) {
+          await notifyUsers(recipients, {
+            message: `"${dataset.name}" failed to rebuild from collector data.`,
+            type: 'warning',
+            url: `/app/farm/${farmId}?drawer=datasets&datasetId=${datasetId}`,
+            metadata: {
+              farmId,
+              datasetId,
+              collectorId: dataset.collectorId,
+              status: 'failed',
+              updatedAt: failureUpdatedAt,
+            },
+          })
+        }
+      } catch (updateError) {
+        console.error('Failed to persist dataset failure state:', updateError)
+      }
+    }
+
+    res.status(500).json({
+      error: 'InternalError',
+      message: 'Failed to rebuild dataset from collector data',
     })
   }
 })

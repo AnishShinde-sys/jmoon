@@ -132,6 +132,12 @@ export type DatasetStatus =
   | 'completed'
   | 'failed'
 
+export interface DatasetProcessing {
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  message?: string
+  updatedAt?: string
+}
+
 export type VizType = 'heatmap' | 'zones' | 'points' | 'none'
 
 export interface VizSettings {
@@ -170,6 +176,8 @@ export interface Dataset {
   originalHeaders?: string[]
   geojsonPath?: string
   rasterPath?: string
+  dynamic?: boolean
+  processing?: DatasetProcessing
 }
 
 export interface CreateDatasetInput {

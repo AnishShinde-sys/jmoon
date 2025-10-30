@@ -3,9 +3,61 @@ import { v4 as uuidv4 } from 'uuid'
 import { authenticate, AuthRequest } from '../middleware/auth'
 import { gcsClient } from '../services/gcsClient'
 import { checkFarmAccess } from './blocks'
-import { Collector, CreateCollectorInput, DataPoint, CreateDataPointInput } from '../types'
+import { Collector, CreateCollectorInput, DataPoint, CreateDataPointInput, Dataset, Farm } from '../types'
+import { notifyUsers } from '../services/notificationService'
 
 const router = Router()
+
+async function findDatasetForCollector(
+  farmId: string,
+  collectorId: string
+): Promise<{ dataset: Dataset; metadataPath: string } | null> {
+  try {
+    const prefix = `farms/${farmId}/datasets/`
+    const files = await gcsClient.listFiles(prefix)
+    const metadataFiles = files.filter((file) => file.endsWith('/metadata.json'))
+
+    for (const file of metadataFiles) {
+      try {
+        const candidate = await gcsClient.readJSON<Dataset>(file)
+        if (candidate.collectorId === collectorId) {
+          return { dataset: candidate, metadataPath: file }
+        }
+      } catch (error) {
+        console.error(`Failed to inspect dataset ${file} while resolving collector link:`, error)
+      }
+    }
+  } catch (error) {
+    console.error('Failed to list datasets for collector lookup:', error)
+  }
+
+  return null
+}
+
+function gatherNotificationRecipients(farm: Farm, dataset?: Dataset | null, collector?: Collector | null) {
+  const recipients = new Set<string>()
+  if (dataset) {
+    if (dataset.createdBy) recipients.add(dataset.createdBy)
+    if ((dataset as any).updatedBy) recipients.add((dataset as any).updatedBy)
+    if ((dataset as any).ownerId) recipients.add((dataset as any).ownerId)
+    if (Array.isArray((dataset as any).editors)) {
+      ;((dataset as any).editors as string[]).forEach((id) => id && recipients.add(id))
+    }
+    if (Array.isArray((dataset as any).collaborators)) {
+      ;((dataset as any).collaborators as Array<{ userId?: string }>).forEach((collaborator) => {
+        if (collaborator?.userId) recipients.add(collaborator.userId)
+      })
+    }
+  }
+  if (collector && collector.createdBy) recipients.add(collector.createdBy)
+  if (farm.owner) recipients.add(farm.owner)
+  farm.collaborators?.forEach((collaborator) => {
+    if (collaborator.role !== 'viewer') {
+      recipients.add(collaborator.userId)
+    }
+  })
+  return Array.from(recipients)
+}
 
 /**
  * GET /api/farms/:farmId/collectors
@@ -48,7 +100,12 @@ router.get('/farms/:farmId/collectors', authenticate, async (req: AuthRequest, r
       .filter((c) => c !== null) as Collector[])
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 
-    res.json(validCollectors)
+    const normalizedCollectors = validCollectors.map((collector) => ({
+      ...collector,
+      reCompile: Boolean(collector.reCompile),
+    }))
+
+    res.json(normalizedCollectors)
   } catch (error: any) {
     console.error('Error listing collectors:', error)
     res.status(500).json({
@@ -97,6 +154,7 @@ router.post('/farms/:farmId/collectors', authenticate, async (req: AuthRequest, 
       createdBy: userId,
       createdAt: now,
       updatedAt: now,
+      reCompile: false,
     }
 
     // Save collector metadata
@@ -289,8 +347,66 @@ router.post('/farms/:farmId/collectors/:collectorId/datapoints', authenticate, a
     // Save data points
     await gcsClient.writeJSON(dataPointsPath, dataPoints)
 
+    // Flag linked dataset for recompilation
+    let datasetMetadataPath: string | null = null
+    let datasetMetadata: Dataset | null = null
+
+    if (collector.datasetId) {
+      const candidatePath = `farms/${farmId}/datasets/${collector.datasetId}/metadata.json`
+      if (await gcsClient.exists(candidatePath)) {
+        datasetMetadataPath = candidatePath
+        datasetMetadata = await gcsClient.readJSON<Dataset>(candidatePath)
+      }
+    }
+
+    if (!datasetMetadataPath) {
+      const match = await findDatasetForCollector(farmId, collectorId)
+      if (match) {
+        datasetMetadataPath = match.metadataPath
+        datasetMetadata = match.dataset
+        collector.datasetId = match.dataset.id
+      }
+    }
+
+    if (datasetMetadata && datasetMetadataPath) {
+      const previousStatus = datasetMetadata.processing?.status
+      datasetMetadata.dynamic = true
+      datasetMetadata.collectorId = collectorId
+      datasetMetadata.updatedAt = now
+      datasetMetadata.recordCount = dataPoints.length
+      datasetMetadata.processing = {
+        status: 'pending',
+        updatedAt: now,
+        message: 'New readings captured. Rebuild to refresh this dataset.',
+      }
+      await gcsClient.writeJSON(datasetMetadataPath, datasetMetadata)
+
+      if (previousStatus !== 'pending') {
+        const recipients = gatherNotificationRecipients(farm, datasetMetadata, collector).filter(
+          (id) => id && id !== userId
+        )
+        if (recipients.length > 0) {
+          await notifyUsers(recipients, {
+            message: `New readings from ${collector.name ?? 'collector'} are ready to be merged into "${
+              datasetMetadata.name ?? 'dataset'
+            }".`,
+            type: 'warning',
+            url: `/app/farm/${farmId}?drawer=datasets&datasetId=${datasetMetadata.id}`,
+            metadata: {
+              farmId,
+              datasetId: datasetMetadata.id,
+              collectorId,
+              status: 'pending',
+              updatedAt: now,
+            },
+          })
+        }
+      }
+    }
+
     // Update collector metadata
     collector.updatedAt = now
+    collector.reCompile = true
     await gcsClient.writeJSON(collectorPath, collector)
 
     res.status(201).json(dataPoint)

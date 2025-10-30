@@ -1,8 +1,8 @@
 export interface VizSettings {
-  classification: 'jenks' | 'equal' | 'quantile'
-  zones: number
-  colorSetting: 'linear' | 'stepped'
-  interpolated: boolean
+  classification?: 'jenks' | 'equal' | 'quantile'
+  zones?: number
+  colorSetting?: 'linear' | 'stepped'
+  interpolated?: boolean
   interpolatedMin?: number
   interpolatedMax?: number
   min?: number
@@ -11,12 +11,32 @@ export interface VizSettings {
   filters?: DatasetFilter[]
   recalculateJenks?: boolean
   recalculateRange?: boolean
+  type?: 'circle' | 'polygon' | 'heatmap'
+  colorBy?: 'solid' | 'valueBased'
+  circleRadius?: number
+  circleColor?: string
+  opacity?: number
+  colorHeader?: string
+  colors?: string[]
+  zoneClassification?: string
+  zoneStops?: number
+  featureCategories?: Array<{ label: string; color: string; value: string | number }>
+  minValue?: number | false
+  maxValue?: number | false
+  categorical?: boolean
+  number?: boolean
 }
 
 export interface DatasetFilter {
   header: string
   min: number
   max: number
+}
+
+export interface DatasetProcessing {
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  message?: string
+  updatedAt?: string
 }
 
 export interface Dataset {
@@ -33,10 +53,7 @@ export interface Dataset {
   createdAt?: string
   updatedAt?: string
   vizSettings?: VizSettings
-  processing?: {
-    status: 'pending' | 'processing' | 'ready' | 'error'
-    message?: string
-  }
+  processing?: DatasetProcessing
   status?: 'uploading' | 'processing' | 'completed' | 'failed'
   type?: DatasetType
   recordCount?: number
