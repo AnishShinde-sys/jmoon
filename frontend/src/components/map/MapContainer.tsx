@@ -40,9 +40,31 @@ function MapContainer({
 }: MapContainerProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const { map, setMap, draw, setDraw } = useMapContext()
+  const [tokenMissing, setTokenMissing] = useState(false)
+
+  if (!mapboxgl.accessToken && process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN) {
+    mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN
+  }
+
+  // Debug token availability
+  useEffect(() => {
+    console.log('🗺️ Mapbox token check:', {
+      accessToken: mapboxgl.accessToken ? 'SET' : 'MISSING',
+      envVar: process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN ? 'SET' : 'MISSING',
+      tokenLength: mapboxgl.accessToken?.length || 0,
+    })
+  }, [])
 
   useEffect(() => {
     if (!mapContainerRef.current || map) return
+
+    if (!mapboxgl.accessToken) {
+      console.error('Mapbox access token missing. Set NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN to enable maps.')
+      setTokenMissing(true)
+      return
+    }
+
+    setTokenMissing(false)
 
     // Initialize map
     const newMap = new mapboxgl.Map({
@@ -91,7 +113,7 @@ function MapContainer({
       newMap.remove()
       setMap(null)
     }
-  }, [])
+  }, []) // Remove dependencies to prevent re-initialization
 
   // Handle blocks data updates - only when blocks change or source doesn't exist
   useEffect(() => {
@@ -319,6 +341,16 @@ function MapContainer({
         className="absolute inset-0" 
         style={{ width: '100%', height: '100%' }}
       />
+      {tokenMissing && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-900/70 p-6 text-center text-sm text-white">
+          <div className="space-y-2">
+            <p className="font-medium">Mapbox access token missing</p>
+            <p className="text-xs text-gray-200">
+              Set <code className="rounded bg-gray-800 px-1 py-0.5">NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN</code> in your environment to enable interactive maps.
+            </p>
+          </div>
+        </div>
+      )}
       {children}
     </div>
   )

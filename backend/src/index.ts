@@ -12,6 +12,8 @@ import farmsRouter from './routes/farms'
 import blocksRouter from './routes/blocks'
 import datasetsRouter from './routes/datasets'
 import usersRouter from './routes/users'
+import pluginsRouter from './routes/plugins'
+import collectorsRouter from './routes/collectors'
 
 // Import middleware
 import { errorHandler } from './middleware/errorHandler'
@@ -39,6 +41,8 @@ app.use('/api/users', usersRouter)
 app.use('/api/farms', farmsRouter)
 app.use('/api', blocksRouter) // Mount at /api so routes like /farms/:farmId/blocks work
 app.use('/api', datasetsRouter) // Mount at /api so routes like /farms/:farmId/datasets work
+app.use('/api', pluginsRouter)
+app.use('/api', collectorsRouter) // Mount at /api so routes like /farms/:farmId/collectors work
 
 // 404 handler
 app.use((req, res) => {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Dataset, CreateDatasetInput, UpdateDatasetInput } from '@/types/dataset'
 import apiClient from '@/lib/apiClient'
 
@@ -7,7 +7,7 @@ export function useDatasets(farmId: string, folderId: string = 'root') {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const fetchDatasets = async () => {
+  const fetchDatasets = useCallback(async () => {
     if (!farmId) return
 
     try {
@@ -22,7 +22,7 @@ export function useDatasets(farmId: string, folderId: string = 'root') {
     } finally {
       setLoading(false)
     }
-  }
+  }, [farmId, folderId])
 
   const uploadDataset = async (file: File, metadata: CreateDatasetInput) => {
     const formData = new FormData()
@@ -30,6 +30,9 @@ export function useDatasets(farmId: string, folderId: string = 'root') {
     formData.append('name', metadata.name)
     if (metadata.description) formData.append('description', metadata.description)
     if (metadata.folderId) formData.append('folderId', metadata.folderId)
+     if (metadata.type) formData.append('type', metadata.type)
+     if (metadata.columnMapping) formData.append('columnMapping', JSON.stringify(metadata.columnMapping))
+     if (metadata.originalHeaders) formData.append('originalHeaders', JSON.stringify(metadata.originalHeaders))
 
     const response = await apiClient.post(`/api/farms/${farmId}/datasets/upload`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -59,7 +62,7 @@ export function useDatasets(farmId: string, folderId: string = 'root') {
 
   useEffect(() => {
     fetchDatasets()
-  }, [farmId, folderId])
+  }, [fetchDatasets])
 
   return {
     datasets,

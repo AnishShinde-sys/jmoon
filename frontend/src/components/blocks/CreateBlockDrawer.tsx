@@ -1,5 +1,6 @@
+"use client"
+
 import { useState, useEffect } from 'react'
-import { useParams } from 'react-router-dom'
 import { useBlocks } from '../../hooks/useBlocks'
 import { useMap } from '../../hooks/useMap'
 import { useMapContext } from '../../context/MapContext'
@@ -10,9 +11,12 @@ import { PlusIcon, XMarkIcon } from '@heroicons/react/24/outline'
 
 const DRAWER_NAME = 'createBlock'
 
-export default function CreateBlockDrawer() {
-  const { farmId } = useParams<{ farmId: string }>()
-  const { createBlock, refetch, updateBlock } = useBlocks(farmId || '')
+interface CreateBlockDrawerProps {
+  farmId: string
+}
+
+export default function CreateBlockDrawer({ farmId }: CreateBlockDrawerProps) {
+  const { createBlock, refetch, updateBlock } = useBlocks(farmId)
   const { setDrawMode, clearDrawing } = useMap()
   const { map, draw } = useMapContext()
   const { drawers, closeDrawer, showAlert, openDrawer } = useUI()
@@ -28,6 +32,7 @@ export default function CreateBlockDrawer() {
   const [customFields, setCustomFields] = useState<BlockField[]>([])
   const [loading, setLoading] = useState(false)
   const [drawnGeometry, setDrawnGeometry] = useState<any>(null)
+  const [revisionMessage, setRevisionMessage] = useState('')
 
   // Listen for edit block events
   useEffect(() => {
@@ -47,6 +52,7 @@ export default function CreateBlockDrawer() {
       if (block.geometry) {
         setDrawnGeometry(block.geometry)
       }
+      setRevisionMessage(block.revisionMessage || '')
       // Open the drawer
       openDrawer(DRAWER_NAME)
     }
@@ -87,6 +93,7 @@ export default function CreateBlockDrawer() {
       vineSpacing: '',
     })
     setCustomFields([])
+    setRevisionMessage('')
     closeDrawer(DRAWER_NAME)
   }
 
@@ -95,7 +102,7 @@ export default function CreateBlockDrawer() {
     setLoading(true)
 
     try {
-      const input: CreateBlockInput = {
+      const input: CreateBlockInput & { revisionMessage?: string } = {
         name: formData.name,
         variety: formData.variety || undefined,
         plantingYear: formData.plantingYear || undefined,
@@ -107,7 +114,10 @@ export default function CreateBlockDrawer() {
 
       if (isEditMode && editingBlockId) {
         // Update existing block
-        await updateBlock(editingBlockId, input)
+        await updateBlock(editingBlockId, {
+          ...input,
+          revisionMessage: revisionMessage.trim() ? revisionMessage.trim() : undefined,
+        })
         showAlert('Block updated successfully', 'success')
       } else {
         // Create new block
@@ -133,6 +143,7 @@ export default function CreateBlockDrawer() {
       setCustomFields([])
       setIsEditMode(false)
       setEditingBlockId(null)
+      setRevisionMessage('')
       closeDrawer(DRAWER_NAME)
     } catch (error: any) {
       showAlert(error.message || `Failed to ${isEditMode ? 'update' : 'create'} block`, 'error')
@@ -330,6 +341,20 @@ export default function CreateBlockDrawer() {
                 </div>
               )}
             </div>
+
+            {isEditMode && (
+              <div className="border-t pt-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Revision Note
+                </label>
+                <textarea
+                  value={revisionMessage}
+                  onChange={(e) => setRevisionMessage(e.target.value)}
+                  className="input min-h-[90px]"
+                  placeholder="Describe what changed in this update (optional)"
+                />
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex items-center gap-3 pt-4 border-t">

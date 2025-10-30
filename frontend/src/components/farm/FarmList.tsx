@@ -1,4 +1,7 @@
-import { useNavigate } from 'react-router-dom'
+"use client"
+
+import { useRouter } from 'next/navigation'
+
 import { Farm } from '@/types/farm'
 
 interface FarmListProps {
@@ -8,7 +11,7 @@ interface FarmListProps {
 }
 
 export default function FarmList({ farms, loading, onCreateFarm }: FarmListProps) {
-  const navigate = useNavigate()
+  const router = useRouter()
 
   if (loading) {
     return (
@@ -42,7 +45,7 @@ export default function FarmList({ farms, loading, onCreateFarm }: FarmListProps
       {farms.map((farm) => (
         <div
           key={farm.id}
-          onClick={() => navigate(`/farm/${farm.id}`)}
+          onClick={() => router.push(`/farm/${farm.id}`)}
           className="card cursor-pointer hover:shadow-xl transition-shadow duration-200"
         >
           <div className="card-body">
@@ -68,7 +71,7 @@ export default function FarmList({ farms, loading, onCreateFarm }: FarmListProps
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  navigate(`/farm/${farm.id}`)
+                  router.push(`/farm/${farm.id}`)
                 }}
                 className="text-primary-600 text-xs hover:text-primary-700"
               >

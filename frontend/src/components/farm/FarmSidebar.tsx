@@ -1,8 +1,11 @@
+"use client"
+
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useRouter } from 'next/navigation'
 import { Farm } from '@/types/farm'
-import { Cog6ToothIcon, UsersIcon, MapPinIcon, XMarkIcon, HomeIcon } from '@heroicons/react/24/outline'
+import { Cog6ToothIcon, UsersIcon, MapPinIcon, XMarkIcon, HomeIcon, FolderIcon, ClipboardDocumentListIcon } from '@heroicons/react/24/outline'
 import FarmVizSettings from './FarmVizSettings'
+import { useUI } from '@/context/UIContext'
 
 interface FarmSidebarProps {
   farm: Farm
@@ -27,11 +30,12 @@ export default function FarmSidebar({
   onVizUpdate,
   isOpen,
 }: FarmSidebarProps) {
-  const navigate = useNavigate()
+  const router = useRouter()
+  const { openDrawer } = useUI()
   const [activeTab, setActiveTab] = useState<'viz' | 'info' | 'list' | 'cloud' | 'file'>('viz')
 
   const handleBackToFarms = () => {
-    navigate('/dashboard')
+    router.push('/dashboard')
   }
 
   // Update visualization settings
@@ -183,6 +187,20 @@ export default function FarmSidebar({
             </svg>
           </button>
           <button
+            onClick={() => openDrawer('datasets')}
+            className={`flex-1 py-3 flex items-center justify-center transition-colors text-gray-600 hover:text-gray-900`}
+            title="Datasets"
+          >
+            <FolderIcon className="w-5 h-5" />
+          </button>
+          <button
+            onClick={() => openDrawer('collectors')}
+            className={`flex-1 py-3 flex items-center justify-center transition-colors text-gray-600 hover:text-gray-900`}
+            title="Data Collectors"
+          >
+            <ClipboardDocumentListIcon className="w-5 h-5" />
+          </button>
+          <button
             onClick={() => setActiveTab('cloud')}
             className={`flex-1 py-3 flex items-center justify-center transition-colors ${
               activeTab === 'cloud' ? 'bg-white border-b-2 border-yellow-600 text-yellow-600' : 'text-gray-600 hover:text-gray-900'
@@ -190,6 +208,15 @@ export default function FarmSidebar({
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+            </svg>
+          </button>
+          <button
+            onClick={() => openDrawer('plugins')}
+            className={`flex-1 py-3 flex items-center justify-center transition-colors text-gray-600 hover:text-gray-900`}
+            title="Plugins"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 011-1h1a2 2 0 100-4H7a1 1 0 01-1-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
             </svg>
           </button>
           <button

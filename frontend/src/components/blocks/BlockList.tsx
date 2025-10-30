@@ -1,5 +1,6 @@
+"use client"
+
 import { useState, useEffect } from 'react'
-import { useParams } from 'react-router-dom'
 import { useBlocks } from '../../hooks/useBlocks'
 import { useMap } from '../../hooks/useMap'
 import { Block } from '../../types/block'
@@ -9,13 +10,13 @@ import { Button } from '../ui/button'
 import { Card, CardContent } from '../ui/card'
 
 interface BlockListProps {
+  farmId: string
   onCreateClick?: () => void
   onBlockSelect?: (block: Block) => void
 }
 
-export default function BlockList({ onCreateClick, onBlockSelect }: BlockListProps) {
-  const { farmId } = useParams<{ farmId: string }>()
-  const { blocks, blocksGeoJSON, loading, error, deleteBlock } = useBlocks(farmId!)
+export default function BlockList({ farmId, onCreateClick, onBlockSelect }: BlockListProps) {
+  const { blocks, blocksGeoJSON, loading, error, deleteBlock } = useBlocks(farmId)
   const { addGeoJSONSource, addLayer, fitBounds } = useMap()
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)

@@ -1,21 +1,25 @@
+"use client"
+
 import { useState, useEffect } from 'react'
-import { useParams } from 'react-router-dom'
 import { useUI } from '@/context/UIContext'
 import { Block } from '@/types/block'
 import Drawer from '../ui/Drawer'
 import apiClient from '@/lib/apiClient'
-import { 
+import {
   PencilIcon,
   TrashIcon,
-  MapIcon,
-  CalendarIcon
+  CalendarIcon,
+  ArrowPathIcon,
 } from '@heroicons/react/24/outline'
 
 const DRAWER_NAME = 'blockDetails'
 
-export default function BlockDetailsDrawer() {
-  const { farmId } = useParams<{ farmId: string }>()
-  const { drawers, closeDrawer, showAlert } = useUI()
+interface BlockDetailsDrawerProps {
+  farmId: string
+}
+
+export default function BlockDetailsDrawer({ farmId }: BlockDetailsDrawerProps) {
+  const { drawers, closeDrawer, showAlert, openDrawer } = useUI()
   const [block, setBlock] = useState<Block | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -33,8 +37,12 @@ export default function BlockDetailsDrawer() {
     setLoading(true)
     try {
       const response = await apiClient.get(`/api/farms/${farmId}/blocks/${id}`)
-      // Backend returns GeoJSON Feature, extract properties for Block type
-      const blockData = response.data.properties || response.data
+      const feature = response.data
+      // Backend returns GeoJSON Feature, extract properties for Block type and retain geometry for editing
+      const blockData = {
+        ...(feature.properties || feature),
+        geometry: feature.geometry,
+      }
       setBlock(blockData)
     } catch (error: any) {
       showAlert(error.response?.data?.message || 'Failed to load block details', 'error')
@@ -56,6 +64,12 @@ export default function BlockDetailsDrawer() {
       // Trigger a custom event to open create block drawer with edit data
       window.dispatchEvent(new CustomEvent('editBlock', { detail: { blockId, block } }))
     }, 100)
+  }
+
+  const handleViewRevisions = () => {
+    if (!block || !blockId) return
+    closeDrawer(DRAWER_NAME)
+    setTimeout(() => openDrawer('blockRevisions', blockId), 100)
   }
 
   const handleDelete = async () => {
@@ -160,23 +174,42 @@ export default function BlockDetailsDrawer() {
               <CalendarIcon className="w-4 h-4" />
               <span>Updated: {new Date(block.updatedAt).toLocaleDateString()}</span>
             </div>
+            {block.updatedByName && (
+              <div>
+                <span>Updated By: {block.updatedByName}</span>
+              </div>
+            )}
+            {block.revisionMessage && (
+              <div className="text-gray-600 text-xs">
+                Last Revision: {block.revisionMessage}
+              </div>
+            )}
           </div>
 
           {/* Actions */}
-          <div className="border-t pt-4 flex gap-2">
+          <div className="border-t pt-4 flex flex-col gap-2">
+            <div className="flex gap-2">
+              <button
+                onClick={handleEdit}
+                className="flex-1 btn btn-secondary flex items-center justify-center gap-2"
+              >
+                <PencilIcon className="w-4 h-4" />
+                Edit
+              </button>
+              <button
+                onClick={handleDelete}
+                className="flex-1 btn bg-red-600 hover:bg-red-700 text-white flex items-center justify-center gap-2"
+              >
+                <TrashIcon className="w-4 h-4" />
+                Delete
+              </button>
+            </div>
             <button
-              onClick={handleEdit}
-              className="flex-1 btn btn-secondary flex items-center justify-center gap-2"
+              onClick={handleViewRevisions}
+              className="btn btn-secondary flex items-center justify-center gap-2"
             >
-              <PencilIcon className="w-4 h-4" />
-              Edit
-            </button>
-            <button
-              onClick={handleDelete}
-              className="flex-1 btn bg-red-600 hover:bg-red-700 text-white flex items-center justify-center gap-2"
-            >
-              <TrashIcon className="w-4 h-4" />
-              Delete
+              <ArrowPathIcon className="w-4 h-4" />
+              View Revisions
             </button>
           </div>
         </div>

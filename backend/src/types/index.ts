@@ -38,6 +38,7 @@ export interface Farm {
   }
   owner: string // User ID
   collaborators?: FarmCollaborator[]
+  plugins?: string[]
   createdAt: string
   updatedAt: string
   blockCount: number
@@ -86,6 +87,21 @@ export interface Block {
   customFields?: BlockField[]
   createdAt: string
   updatedAt: string
+  revisionMessage?: string
+  updatedBy?: string
+  updatedByName?: string
+}
+
+export interface BlockRevision {
+  id: string
+  farmId: string
+  blockId: string
+  createdAt: string
+  geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon | GeoJSON.Geometry
+  properties: Block
+  revisionMessage?: string
+  updatedBy?: string
+  updatedByName?: string
 }
 
 export interface CreateBlockInput {
@@ -148,6 +164,12 @@ export interface Dataset {
   recordCount?: number
   bounds?: [number, number, number, number] // [minLon, minLat, maxLon, maxLat]
   error?: string
+  folderId?: string
+  fields?: string[]
+  columnMapping?: Record<string, string>
+  originalHeaders?: string[]
+  geojsonPath?: string
+  rasterPath?: string
 }
 
 export interface CreateDatasetInput {
@@ -156,11 +178,92 @@ export interface CreateDatasetInput {
   description?: string
   collectedAt?: string
   collectorId?: string
+  folderId?: string
+  columnMapping?: Record<string, string>
+  originalHeaders?: string[]
+}
+
+export interface DatasetRevision {
+  id: string
+  datasetId: string
+  farmId: string
+  createdAt: string
+  updatedBy: string
+  updatedByName?: string
+  snapshot: Dataset
+  revisionMessage?: string
+}
+
+export interface DatasetFolder {
+  id: string
+  farmId: string
+  name: string
+  description?: string
+  parentId: string
+  createdAt: string
+  updatedAt: string
 }
 
 // ============================================================================
 // Data Collector Types
 // ============================================================================
+
+export interface CollectorField {
+  label: string
+  machine_name: string
+  type: 'Text' | 'Number' | 'Select' | 'Date and Time' | 'Image' | 'Computer Vision' | 'CV Number'
+  options?: string[]
+  required?: boolean
+  group?: string
+  hidden?: boolean
+  min?: number
+  max?: number
+  step?: number
+  suffix?: string
+}
+
+export interface Collector {
+  id: string
+  farmId: string
+  name: string
+  description?: string
+  fields: CollectorField[]
+  datasetId?: string
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+  reCompile?: boolean
+  editors?: string[]
+}
+
+export interface DataPoint {
+  id: string
+  collectorId: string
+  geolocation: {
+    latitude: number
+    longitude: number
+  }
+  [key: string]: any // Dynamic fields based on collector definition
+  createdAt: string
+  updatedAt: string
+  createdBy: string
+}
+
+export interface CreateCollectorInput {
+  farmId: string
+  name: string
+  description?: string
+  fields: CollectorField[]
+}
+
+export interface CreateDataPointInput {
+  collectorId: string
+  geolocation: {
+    latitude: number
+    longitude: number
+  }
+  [key: string]: any // Dynamic fields
+}
 
 export interface DataCollector {
   id: string

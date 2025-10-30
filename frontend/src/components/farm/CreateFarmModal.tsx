@@ -1,3 +1,5 @@
+'use client'
+
 import { useState, useEffect, useRef, FormEvent } from 'react'
 import mapboxgl from 'mapbox-gl'
 import MapboxGeocoder from '@mapbox/mapbox-gl-geocoder'
@@ -32,7 +34,7 @@ export default function CreateFarmModal({ isOpen, onClose, onSubmit }: CreateFar
     if (!isOpen || !mapContainerRef.current || mapRef.current) return
 
     // Set Mapbox access token
-    mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN
+    mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || process.env.VITE_MAPBOX_ACCESS_TOKEN || ''
 
     // Initialize map
     const map = new mapboxgl.Map({
@@ -52,7 +54,7 @@ export default function CreateFarmModal({ isOpen, onClose, onSubmit }: CreateFar
       marker: false, // We'll add our own marker
       zoom: 16,
     })
-    map.addControl(geocoder as any)
+    map.addControl(geocoder as any, 'top-left')
 
     // Handle geocoder result
     geocoder.on('result', (e: any) => {

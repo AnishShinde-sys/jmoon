@@ -1,15 +1,15 @@
 import axios from 'axios'
 import { auth } from './firebase'
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? process.env.VITE_API_BASE_URL
 
 if (!apiBaseUrl) {
-  console.warn('VITE_API_BASE_URL not set. API calls may fail.')
+  console.warn('NEXT_PUBLIC_API_BASE_URL (or legacy VITE_API_BASE_URL) not set. API calls may fail.')
 }
 
 // Create axios instance with default config
 export const apiClient = axios.create({
-  baseURL: apiBaseUrl,
+  baseURL: apiBaseUrl || '',
   headers: {
     'Content-Type': 'application/json',
   },

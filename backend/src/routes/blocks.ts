@@ -2,7 +2,8 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { authenticate, AuthRequest } from '../middleware/auth'
 import { gcsClient } from '../services/gcsClient'
-import { Farm, Block, CreateBlockInput } from '../types'
+import { Farm, Block, CreateBlockInput, BlockRevision } from '../types'
+import { Feature } from 'geojson'
 import * as turf from '@turf/turf'
 
 const router = Router()
@@ -10,7 +11,7 @@ const router = Router()
 /**
  * Helper: Check if user has access to farm
  */
-async function checkFarmAccess(farmId: string, userId: string): Promise<Farm | null> {
+export async function checkFarmAccess(farmId: string, userId: string): Promise<Farm | null> {
   try {
     const farmPath = `farms/${farmId}/metadata.json`
     const exists = await gcsClient.exists(farmPath)
@@ -33,6 +34,31 @@ async function checkFarmAccess(farmId: string, userId: string): Promise<Farm | n
     console.error('Error checking farm access:', error)
     return null
   }
+}
+
+function getRevisionsPath(farmId: string, blockId: string): string {
+  return `farms/${farmId}/blocks/${blockId}/revisions.json`
+}
+
+async function readBlockRevisions(farmId: string, blockId: string): Promise<BlockRevision[]> {
+  const path = getRevisionsPath(farmId, blockId)
+  try {
+    const exists = await gcsClient.exists(path)
+    if (!exists) {
+      return []
+    }
+
+    const data = await gcsClient.readJSON<BlockRevision[]>(path)
+    return Array.isArray(data) ? data : []
+  } catch (error) {
+    console.error('Error reading block revisions:', error)
+    return []
+  }
+}
+
+async function writeBlockRevisions(farmId: string, blockId: string, revisions: BlockRevision[]): Promise<void> {
+  const path = getRevisionsPath(farmId, blockId)
+  await gcsClient.writeJSON(path, revisions)
 }
 
 /**
@@ -263,21 +289,63 @@ router.put('/farms/:farmId/blocks/:blockId', authenticate, async (req: AuthReque
     }
 
     const feature = blocksGeoJSON.features[featureIndex]
+    const originalFeature: Feature = JSON.parse(JSON.stringify(feature))
+    const {
+      geometry: geometryUpdate,
+      revisionMessage,
+      ...propertyUpdates
+    } = updates
 
     // Update geometry if provided
-    if (updates.geometry) {
-      feature.geometry = updates.geometry
-      feature.properties.area = turf.area(updates.geometry)
+    if (geometryUpdate) {
+      feature.geometry = geometryUpdate
+      feature.properties.area = turf.area(geometryUpdate)
     }
 
-    // Update properties
-    feature.properties = {
+    const nowIso = new Date().toISOString()
+    const updatedProperties: Record<string, any> = {
       ...feature.properties,
-      ...updates,
+      ...propertyUpdates,
       id: blockId, // Never allow ID to change
       farmId, // Never allow farmId to change
       geometry: undefined, // Remove geometry from properties
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowIso,
+      updatedBy: userId,
+      updatedByName: req.user?.email,
+    }
+
+    if (revisionMessage !== undefined) {
+      updatedProperties.revisionMessage = revisionMessage
+    }
+
+    feature.properties = updatedProperties
+
+    // Capture previous state as revision
+    try {
+      const revisions = await readBlockRevisions(farmId, blockId)
+      const previousProperties = {
+        ...(originalFeature.properties as Record<string, any>),
+        geometry: undefined,
+      }
+
+      const revisionCreatedAt = previousProperties.updatedAt || nowIso
+      const revisionRecord: BlockRevision = {
+        id: uuidv4(),
+        farmId,
+        blockId,
+        createdAt: revisionCreatedAt,
+        geometry: originalFeature.geometry,
+        properties: previousProperties as Block,
+        revisionMessage: previousProperties.revisionMessage,
+        updatedBy: previousProperties.updatedBy || userId,
+        updatedByName: previousProperties.updatedByName || req.user?.email,
+      }
+
+      revisions.unshift(revisionRecord)
+      const limited = revisions.slice(0, 100)
+      await writeBlockRevisions(farmId, blockId, limited)
+    } catch (revisionError) {
+      console.error('Failed to persist block revision:', revisionError)
     }
 
     // Save blocks
@@ -298,6 +366,148 @@ router.put('/farms/:farmId/blocks/:blockId', authenticate, async (req: AuthReque
     res.status(500).json({
       error: 'InternalError',
       message: 'Failed to update block',
+    })
+  }
+})
+
+/**
+ * GET /api/farms/:farmId/blocks/:blockId/revisions
+ * Retrieve revision history for a block
+ */
+router.get('/farms/:farmId/blocks/:blockId/revisions', authenticate, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id
+    const { farmId, blockId } = req.params
+
+    const farm = await checkFarmAccess(farmId, userId)
+    if (!farm) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Farm not found or access denied',
+      })
+    }
+
+    const revisions = await readBlockRevisions(farmId, blockId)
+    res.json(revisions)
+  } catch (error: any) {
+    console.error('Error fetching block revisions:', error)
+    res.status(500).json({
+      error: 'InternalError',
+      message: 'Failed to fetch block revisions',
+    })
+  }
+})
+
+/**
+ * POST /api/farms/:farmId/blocks/:blockId/revisions/:revisionId/revert
+ * Revert a block to a specific revision
+ */
+router.post('/farms/:farmId/blocks/:blockId/revisions/:revisionId/revert', authenticate, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id
+    const userEmail = req.user?.email
+    const { farmId, blockId, revisionId } = req.params
+    const { revisionMessage } = req.body || {}
+
+    const farm = await checkFarmAccess(farmId, userId)
+    if (!farm) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Farm not found or access denied',
+      })
+    }
+
+    const blocksPath = `farms/${farmId}/blocks.json`
+    const exists = await gcsClient.exists(blocksPath)
+    if (!exists) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Block not found',
+      })
+    }
+
+    const blocksGeoJSON = await gcsClient.readJSON<any>(blocksPath)
+    const featureIndex = blocksGeoJSON.features.findIndex((f: any) => f.id === blockId)
+
+    if (featureIndex === -1) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Block not found',
+      })
+    }
+
+    const revisions = await readBlockRevisions(farmId, blockId)
+    const revision = revisions.find((r) => r.id === revisionId)
+
+    if (!revision) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Revision not found',
+      })
+    }
+
+    const nowIso = new Date().toISOString()
+    const currentFeature: Feature = JSON.parse(JSON.stringify(blocksGeoJSON.features[featureIndex]))
+
+    // Store current block state as a new revision entry before reverting
+    const currentProperties = {
+      ...(currentFeature.properties as Record<string, any>),
+      geometry: undefined,
+    }
+
+    const revertRevision: BlockRevision = {
+      id: uuidv4(),
+      farmId,
+      blockId,
+      createdAt: nowIso,
+      geometry: currentFeature.geometry,
+      properties: currentProperties as Block,
+      revisionMessage: revisionMessage
+        ? `Reverted to ${revisionId}: ${revisionMessage}`
+        : `Reverted to ${revisionId}`,
+      updatedBy: userId,
+      updatedByName: userEmail,
+    }
+
+    revisions.unshift(revertRevision)
+
+    // Apply the selected revision to the block feature
+    const feature = blocksGeoJSON.features[featureIndex]
+    feature.geometry = revision.geometry as any
+    feature.properties = {
+      ...revision.properties,
+      id: blockId,
+      farmId,
+      geometry: undefined,
+      updatedAt: nowIso,
+      updatedBy: userId,
+      updatedByName: userEmail,
+      revisionMessage: revisionMessage || revision.revisionMessage,
+    }
+
+    if (feature.geometry) {
+      feature.properties.area = turf.area(feature.geometry as any)
+    }
+
+    await gcsClient.writeJSON(blocksPath, blocksGeoJSON)
+
+    // Update farm metadata area totals
+    const farmPath = `farms/${farmId}/metadata.json`
+    farm.totalArea = blocksGeoJSON.features.reduce(
+      (sum: number, f: any) => sum + (f.properties.area || 0),
+      0
+    )
+    farm.updatedAt = nowIso
+    await gcsClient.writeJSON(farmPath, farm)
+
+    await writeBlockRevisions(farmId, blockId, revisions.slice(0, 100))
+
+    res.json(feature)
+  } catch (error: any) {
+    console.error('Error reverting block revision:', error)
+    res.status(500).json({
+      error: 'InternalError',
+      message: 'Failed to revert block revision',
     })
   }
 })

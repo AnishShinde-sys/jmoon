@@ -17,6 +17,10 @@ export interface Block {
   customFields?: BlockField[]
   createdAt: string
   updatedAt: string
+  revisionMessage?: string
+  updatedBy?: string
+  updatedByName?: string
+  geometry?: GeoJSON.Polygon | GeoJSON.MultiPolygon
 }
 
 export interface CreateBlockInput {
@@ -31,7 +35,11 @@ export interface CreateBlockInput {
 
 export interface UpdateBlockInput {
   name?: string
-  description?: string
-  footprint?: string
-  customFields?: Record<string, any>
+  variety?: string
+  plantingYear?: number
+  rowSpacing?: number
+  vineSpacing?: number
+  geometry?: GeoJSON.Polygon | GeoJSON.MultiPolygon
+  customFields?: BlockField[]
+  revisionMessage?: string
 }

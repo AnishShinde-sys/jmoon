@@ -1,3 +1,5 @@
+'use client'
+
 import { useState, FormEvent } from 'react'
 import { useAuth } from '@/context/AuthContext'
 import { useUI } from '@/context/UIContext'

@@ -1,3 +1,5 @@
+'use client'
+
 import { useUI } from '@/context/UIContext'
 
 export default function Alert() {

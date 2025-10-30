@@ -1,142 +1,266 @@
-import { useState } from 'react'
-import { useParams } from 'react-router-dom'
-import { useUI } from '@/context/UIContext'
-import Drawer from '../ui/Drawer'
-import { 
-  ChartBarIcon, 
-  CubeIcon, 
+"use client"
+
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react'
+import {
+  ChartBarIcon,
+  CubeIcon,
   ArrowsPointingInIcon,
   FolderIcon,
-  Squares2X2Icon
+  Squares2X2Icon,
+  SquaresPlusIcon,
 } from '@heroicons/react/24/outline'
+
+import { useUI } from '@/context/UIContext'
+import { useAuth } from '@/context/AuthContext'
+import Drawer from '../ui/Drawer'
+import apiClient from '@/lib/apiClient'
+import PluginModal from './PluginModal'
+import PluginLibraryModal from './PluginLibraryModal'
+import type { PluginDefinition } from '@/types/plugin'
 
 const DRAWER_NAME = 'plugins'
 const DRAWER_NAME_BLOCKS = 'blockPlugins'
 
-interface Plugin {
-  id: string
-  name: string
-  description: string
-  url: string
-  icon: any
+const iconMap: Record<string, ComponentType<{ className?: string }>> = {
+  ChartBarIcon,
+  CubeIcon,
+  ArrowsPointingInIcon,
+  FolderIcon,
+  Squares2X2Icon,
+  SquaresPlusIcon,
 }
 
-export default function PluginsDrawer() {
-  const { farmId } = useParams<{ farmId: string }>()
-  const { drawers, closeDrawer } = useUI()
-  const [isPluginModalOpen, setIsPluginModalOpen] = useState(false)
-  const [selectedPlugin, setSelectedPlugin] = useState<Plugin | null>(null)
+interface PluginsDrawerProps {
+  farmId: string
+  farmOwnerId?: string
+  initialEnabled?: string[]
+  onPluginsChange?: (pluginIds: string[]) => void
+}
 
-  const plugins: Plugin[] = [
-    {
-      id: 'raster-analysis',
-      name: 'Raster Analysis',
-      description: 'Extract data from raster datasets',
-      url: 'https://rasters.efficientvineyard.com',
-      icon: ChartBarIcon
-    },
-    {
-      id: 'interpolator',
-      name: 'Interpolator',
-      description: 'Smooth your data using interpolation',
-      url: 'https://interpolator.efficientvineyard.com',
-      icon: ArrowsPointingInIcon
-    },
-    {
-      id: 'grid-generator',
-      name: 'Grid Generator',
-      description: 'Create grids and random points',
-      url: 'https://grids.efficientvineyard.com',
-      icon: CubeIcon
-    },
-    {
-      id: 'translator',
-      name: 'Translator',
-      description: 'Translate a dataset with sample points',
-      url: 'https://translator.efficientvineyard.com',
-      icon: CubeIcon
-    },
-    {
-      id: 'data-joiner',
-      name: 'Data Joiner',
-      description: 'Join several datasets together',
-      url: 'https://joiner.efficientvineyard.com',
-      icon: FolderIcon
-    },
-    {
-      id: 'multivariate',
-      name: 'Multivariate Zoning',
-      description: 'Create zones with many variables',
-      url: 'https://multivariate.efficientvineyard.com',
-      icon: Squares2X2Icon
+export default function PluginsDrawer({ farmId, farmOwnerId, initialEnabled, onPluginsChange }: PluginsDrawerProps) {
+  const { drawers, closeDrawer, showAlert } = useUI()
+  const { user } = useAuth()
+
+  const [plugins, setPlugins] = useState<PluginDefinition[]>([])
+  const [enabledPluginIds, setEnabledPluginIds] = useState<string[]>(initialEnabled ?? [])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [libraryOpen, setLibraryOpen] = useState(false)
+  const [selectedPlugin, setSelectedPlugin] = useState<PluginDefinition | null>(null)
+  const [pluginUrl, setPluginUrl] = useState<string | null>(null)
+  const [togglingId, setTogglingId] = useState<string | null>(null)
+
+  const isDrawerOpen = Boolean(drawers[DRAWER_NAME] || drawers[DRAWER_NAME_BLOCKS])
+  const canManage = Boolean(user && farmOwnerId && user.id === farmOwnerId)
+
+  useEffect(() => {
+    if (initialEnabled) {
+      setEnabledPluginIds(initialEnabled)
     }
-  ]
+  }, [initialEnabled])
 
-  const handleLaunchPlugin = (plugin: Plugin) => {
-    setSelectedPlugin(plugin)
-    setIsPluginModalOpen(true)
-  }
+  const fetchPlugins = useCallback(async () => {
+    if (!farmId) return
+    setLoading(true)
+    setError(null)
 
-  const drawerName = drawers[ drawers[DRAWER_NAME] ? DRAWER_NAME : DRAWER_NAME_BLOCKS] 
-    ? DRAWER_NAME 
-    : DRAWER_NAME_BLOCKS
+    try {
+      const [directoryRes, stateRes] = await Promise.all([
+        apiClient.get<PluginDefinition[]>('/api/plugins'),
+        apiClient.get<{ enabled: string[] }>(`/api/farms/${farmId}/plugins`),
+      ])
+
+      const directory = directoryRes.data || []
+      const enabled = stateRes.data?.enabled || []
+
+      setPlugins(directory)
+      setEnabledPluginIds(enabled)
+      onPluginsChange?.(enabled)
+    } catch (err: any) {
+      const message = err?.response?.data?.message || 'Failed to load plugins'
+      setError(message)
+    } finally {
+      setLoading(false)
+    }
+  }, [farmId, onPluginsChange])
+
+  useEffect(() => {
+    if (isDrawerOpen) {
+      fetchPlugins()
+    }
+  }, [isDrawerOpen, fetchPlugins])
+
+  const enabledSet = useMemo(() => new Set(enabledPluginIds), [enabledPluginIds])
+  const sortedPlugins = useMemo(
+    () => [...plugins].sort((a, b) => a.name.localeCompare(b.name)),
+    [plugins]
+  )
+
+  const buildPluginUrl = useCallback(
+    (plugin: PluginDefinition) => {
+      let base = plugin.url
+      if (plugin.appendFarmId) {
+        base = `${base.replace(/\/$/, '')}/${farmId}`
+      }
+
+      const params = new URLSearchParams()
+      if (plugin.authRequired && user?.email) {
+        params.set('email', user.email)
+      }
+
+      const query = params.toString()
+      if (query.length > 0) {
+        base += base.includes('?') ? `&${query}` : `?${query}`
+      }
+
+      return base
+    },
+    [farmId, user?.email]
+  )
+
+  const handleLaunchPlugin = useCallback(
+    (plugin: PluginDefinition) => {
+      const url = buildPluginUrl(plugin)
+      setSelectedPlugin(plugin)
+      setPluginUrl(url)
+    },
+    [buildPluginUrl]
+  )
+
+  const handleToggle = useCallback(
+    async (plugin: PluginDefinition, shouldEnable: boolean) => {
+      if (!farmId) return
+
+      setTogglingId(plugin.id)
+      try {
+        const response = await apiClient.post<{ enabled: string[] }>(
+          `/api/farms/${farmId}/plugins/${plugin.id}`,
+          {
+            enabled: shouldEnable,
+          }
+        )
+
+        const nextEnabled = response.data?.enabled || []
+        setEnabledPluginIds(nextEnabled)
+        onPluginsChange?.(nextEnabled)
+        showAlert(
+          shouldEnable
+            ? `${plugin.name} activated for this farm.`
+            : `${plugin.name} deactivated.`,
+          'success'
+        )
+      } catch (err: any) {
+        const message = err?.response?.data?.message || 'Failed to update plugin state'
+        showAlert(message, 'error')
+      } finally {
+        setTogglingId(null)
+      }
+    },
+    [farmId, onPluginsChange, showAlert]
+  )
+
+  const handleCloseDrawer = useCallback(() => {
+    if (drawers[DRAWER_NAME]) closeDrawer(DRAWER_NAME)
+    if (drawers[DRAWER_NAME_BLOCKS]) closeDrawer(DRAWER_NAME_BLOCKS)
+    setLibraryOpen(false)
+    setSelectedPlugin(null)
+    setPluginUrl(null)
+  }, [closeDrawer, drawers])
 
   return (
     <>
-      <Drawer 
-        isOpen={(drawers[DRAWER_NAME] || drawers[DRAWER_NAME_BLOCKS]) || false} 
-        title="Plugins" 
-        onClose={() => {
-          if (drawers[DRAWER_NAME]) closeDrawer(DRAWER_NAME)
-          if (drawers[DRAWER_NAME_BLOCKS]) closeDrawer(DRAWER_NAME_BLOCKS)
-        }} 
+      <Drawer
+        isOpen={isDrawerOpen}
+        title="Plugins"
+        onClose={handleCloseDrawer}
         position="left"
         showBackdrop={false}
       >
-        <div className="space-y-2">
-          {plugins.map((plugin) => {
-            const Icon = plugin.icon
-            return (
-              <div
-                key={plugin.id}
-                onClick={() => handleLaunchPlugin(plugin)}
-                className="p-3 border border-gray-200 rounded-md hover:bg-gray-50 cursor-pointer transition-colors"
-              >
-                <div className="flex items-start gap-3">
-                  <Icon className="w-5 h-5 text-primary-600 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="font-medium text-sm text-gray-900">{plugin.name}</p>
-                    <p className="text-xs text-gray-500 mt-1">{plugin.description}</p>
-                  </div>
-                </div>
+        <div className="space-y-4">
+          {canManage && (
+            <div className="flex items-center justify-between rounded-md border border-dashed border-gray-300 bg-gray-50 px-3 py-2 text-sm">
+              <div>
+                <p className="font-medium text-gray-700">Manage farm plugins</p>
+                <p className="text-xs text-gray-500">Activate partner integrations from the plugin library.</p>
               </div>
-            )
-          })}
+              <button
+                onClick={() => setLibraryOpen(true)}
+                className="btn btn-secondary btn-sm whitespace-nowrap"
+              >
+                Open Library
+              </button>
+            </div>
+          )}
+
+          {loading ? (
+            <div className="flex flex-col items-center gap-3 py-10 text-sm text-gray-500">
+              <div className="spinner" />
+              Loading plugins…
+            </div>
+          ) : error ? (
+            <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              {error}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {sortedPlugins.map((plugin) => {
+                const IconComponent = plugin.icon && iconMap[plugin.icon] ? iconMap[plugin.icon] : ChartBarIcon
+                const isEnabled = enabledSet.has(plugin.id)
+
+                return (
+                  <div
+                    key={plugin.id}
+                    className="rounded-md border border-gray-200 p-3 transition hover:border-primary-200 hover:bg-primary-50/30"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex flex-1 items-start gap-3">
+                        <IconComponent className="mt-0.5 h-5 w-5 text-primary-600" />
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium text-gray-900">{plugin.name}</p>
+                            {isEnabled && (
+                              <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700">
+                                Active
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-500">{plugin.description}</p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleLaunchPlugin(plugin)}
+                        className="btn btn-primary btn-sm"
+                      >
+                        Launch
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       </Drawer>
 
-      {/* Plugin Modal */}
-      {isPluginModalOpen && selectedPlugin && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50">
-          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden">
-            <div className="p-6">
-              <h3 className="text-xl font-semibold mb-4">{selectedPlugin.name}</h3>
-              <iframe
-                src={selectedPlugin.url}
-                className="w-full h-[600px] border border-gray-200 rounded"
-                title={selectedPlugin.name}
-              />
-              <div className="mt-4 flex justify-end">
-                <button
-                  onClick={() => setIsPluginModalOpen(false)}
-                  className="btn btn-secondary"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+      {libraryOpen && canManage && (
+        <PluginLibraryModal
+          plugins={sortedPlugins}
+          enabled={enabledSet}
+          onClose={() => setLibraryOpen(false)}
+          onToggle={handleToggle}
+          togglingId={togglingId}
+        />
+      )}
+
+      {selectedPlugin && pluginUrl && (
+        <PluginModal
+          plugin={selectedPlugin}
+          url={pluginUrl}
+          onClose={() => {
+            setSelectedPlugin(null)
+            setPluginUrl(null)
+          }}
+        />
       )}
     </>
   )

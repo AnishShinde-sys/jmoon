@@ -14,7 +14,8 @@ export interface Farm {
   id: string
   name: string
   description?: string
-  ownerId: string
+  ownerId?: string
+  owner?: string
   geolocation?: {
     latitude: number
     longitude: number
@@ -25,6 +26,7 @@ export interface Farm {
   updatedAt: string
   users?: Array<{ id: string }>
   permissions?: Record<string, 'Administrator' | 'Editor' | 'Read-only'>
+  plugins?: string[]
 }
 
 export interface FarmCollaborator {

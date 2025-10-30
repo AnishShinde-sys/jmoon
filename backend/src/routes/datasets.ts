@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import multer from 'multer'
 import { authenticate, AuthRequest } from '../middleware/auth'
 import { gcsClient } from '../services/gcsClient'
-import { Farm, Dataset, CreateDatasetInput } from '../types'
+import { Farm, Dataset, CreateDatasetInput, DatasetFolder, DatasetRevision } from '../types'
 import { processFile, detectFileType, ProcessingResult } from '../services/fileProcessor'
 
 const router = Router()
@@ -42,6 +42,101 @@ async function checkFarmAccess(farmId: string, userId: string): Promise<Farm | n
     console.error('Error checking farm access:', error)
     return null
   }
+}
+
+function getDatasetFoldersPath(farmId: string) {
+  return `farms/${farmId}/dataset-folders.json`
+}
+
+function getDatasetRevisionsPath(farmId: string, datasetId: string) {
+  return `farms/${farmId}/datasets/${datasetId}/revisions.json`
+}
+
+function userHasWriteAccess(farm: Farm, userId: string): boolean {
+  if (farm.owner === userId) return true
+  if (farm.collaborators?.some((c) => c.userId === userId && c.role !== 'viewer')) return true
+  if (farm.permissions && typeof farm.permissions[userId] === 'string') {
+    return farm.permissions[userId] !== 'viewer'
+  }
+  return false
+}
+
+async function readDatasetFolders(farmId: string): Promise<DatasetFolder[]> {
+  const path = getDatasetFoldersPath(farmId)
+  const exists = await gcsClient.exists(path)
+  if (!exists) {
+    return []
+  }
+  try {
+    const folders = await gcsClient.readJSON<DatasetFolder[]>(path)
+    return Array.isArray(folders) ? folders : []
+  } catch (error) {
+    console.error('Error reading dataset folders:', error)
+    return []
+  }
+}
+
+async function writeDatasetFolders(farmId: string, folders: DatasetFolder[]): Promise<void> {
+  const path = getDatasetFoldersPath(farmId)
+  await gcsClient.writeJSON(path, folders)
+}
+
+async function appendDatasetRevision(
+  farmId: string,
+  datasetId: string,
+  snapshot: Dataset,
+  updatedBy: { id: string; email?: string },
+  message?: string
+) {
+  try {
+    const path = getDatasetRevisionsPath(farmId, datasetId)
+    let revisions: DatasetRevision[] = []
+    if (await gcsClient.exists(path)) {
+      revisions = await gcsClient.readJSON<DatasetRevision[]>(path)
+    }
+
+    const revision: DatasetRevision = {
+      id: uuidv4(),
+      datasetId,
+      farmId,
+      createdAt: new Date().toISOString(),
+      updatedBy: updatedBy.id,
+      updatedByName: updatedBy.email,
+      snapshot,
+      revisionMessage: message,
+    }
+
+    revisions.unshift(revision)
+    if (revisions.length > 50) {
+      revisions = revisions.slice(0, 50)
+    }
+
+    await gcsClient.writeJSON(path, revisions)
+  } catch (error) {
+    console.error('Failed to append dataset revision:', error)
+  }
+}
+
+async function reassignDatasetsForFolder(farmId: string, folderId: string) {
+  const prefix = `farms/${farmId}/datasets/`
+  const files = await gcsClient.listFiles(prefix)
+  const metadataFiles = files.filter((f) => f.endsWith('/metadata.json'))
+
+  await Promise.all(
+    metadataFiles.map(async (file) => {
+      try {
+        const dataset = await gcsClient.readJSON<Dataset>(file)
+        const currentFolder = dataset.folderId || 'root'
+        if (currentFolder === folderId) {
+          dataset.folderId = 'root'
+          dataset.updatedAt = new Date().toISOString()
+          await gcsClient.writeJSON(file, dataset)
+        }
+      } catch (error) {
+        console.error(`Error reassigning dataset ${file}:`, error)
+      }
+    })
+  )
 }
 
 /**
@@ -86,7 +181,15 @@ router.get('/farms/:farmId/datasets', authenticate, async (req: AuthRequest, res
       .filter((d) => d !== null) as Dataset[])
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 
-    res.json(validDatasets)
+    const folderIdParam = typeof req.query.folderId === 'string' ? req.query.folderId : undefined
+    const filteredDatasets = folderIdParam
+      ? validDatasets.filter((dataset) => {
+          const folderId = dataset.folderId || 'root'
+          return folderId === folderIdParam
+        })
+      : validDatasets
+
+    res.json(filteredDatasets)
   } catch (error: any) {
     console.error('Error listing datasets:', error)
     res.status(500).json({
@@ -125,13 +228,50 @@ router.post(
         })
       }
 
+      if (!userHasWriteAccess(farm, userId)) {
+        return res.status(403).json({
+          error: 'Forbidden',
+          message: 'You do not have permission to upload datasets for this farm',
+        })
+      }
+
       // Parse metadata from form
+      let columnMapping: Record<string, string> | undefined
+      let originalHeaders: string[] | undefined
+
+      if (req.body.columnMapping) {
+        try {
+          const parsed = JSON.parse(req.body.columnMapping)
+          if (parsed && typeof parsed === 'object') {
+            columnMapping = parsed
+          }
+        } catch (error) {
+          console.warn('Invalid columnMapping payload, ignoring.')
+        }
+      }
+
+      if (req.body.originalHeaders) {
+        try {
+          const parsedHeaders = JSON.parse(req.body.originalHeaders)
+          if (Array.isArray(parsedHeaders)) {
+            originalHeaders = parsedHeaders
+          }
+        } catch (error) {
+          console.warn('Invalid originalHeaders payload, ignoring.')
+        }
+      }
+
+      const folderId = req.body.folderId || 'root'
+
       const input: CreateDatasetInput = {
         name: req.body.name || req.file.originalname,
         type: req.body.type || 'geojson',
         description: req.body.description,
         collectedAt: req.body.collectedAt,
         collectorId: req.body.collectorId,
+        folderId,
+        columnMapping,
+        originalHeaders,
       }
 
       // Create dataset ID
@@ -179,6 +319,9 @@ router.post(
             fileSize: req.file.size,
             originalFilename: req.file.originalname,
             rasterPath: jpgPath,
+            folderId,
+            columnMapping,
+            originalHeaders,
           }
           
           const metadataPath = `farms/${farmId}/datasets/${datasetId}/metadata.json`
@@ -230,6 +373,9 @@ router.post(
           fields: processingResult.fields,
           geojsonPath: processedFilePath,
         }),
+        folderId,
+        columnMapping,
+        originalHeaders,
       }
 
       // Save metadata
@@ -282,6 +428,13 @@ router.get('/datasets/:datasetId', authenticate, async (req: AuthRequest, res) =
       })
     }
 
+    if (!userHasWriteAccess(farm, userId)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'You do not have permission to update datasets for this farm',
+      })
+    }
+
     // Read dataset metadata
     const metadataPath = `farms/${farmId}/datasets/${datasetId}/metadata.json`
     const exists = await gcsClient.exists(metadataPath)
@@ -328,6 +481,35 @@ router.put('/datasets/:datasetId', authenticate, async (req: AuthRequest, res) =
     const userId = req.user!.id
     const { datasetId } = req.params
     const updates = req.body
+    const { revisionMessage } = updates
+
+    let parsedColumnMapping: Record<string, string> | undefined
+    if (typeof updates.columnMapping === 'string') {
+      try {
+        parsedColumnMapping = JSON.parse(updates.columnMapping)
+      } catch (error) {
+        console.warn('Invalid columnMapping payload on update, ignoring.')
+      }
+    } else if (updates.columnMapping && typeof updates.columnMapping === 'object') {
+      parsedColumnMapping = updates.columnMapping
+    }
+
+    let parsedHeaders: string[] | undefined
+    if (typeof updates.originalHeaders === 'string') {
+      try {
+        const parsed = JSON.parse(updates.originalHeaders)
+        if (Array.isArray(parsed)) {
+          parsedHeaders = parsed
+        }
+      } catch (error) {
+        console.warn('Invalid originalHeaders payload on update, ignoring.')
+      }
+    } else if (Array.isArray(updates.originalHeaders)) {
+      parsedHeaders = updates.originalHeaders
+    }
+
+    delete updates.columnMapping
+    delete updates.originalHeaders
 
     // Need farmId to locate dataset
     const { farmId } = req.query
@@ -348,6 +530,13 @@ router.put('/datasets/:datasetId', authenticate, async (req: AuthRequest, res) =
       })
     }
 
+    if (!userHasWriteAccess(farm, userId)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'You do not have permission to delete datasets for this farm',
+      })
+    }
+
     // Read dataset metadata
     const metadataPath = `farms/${farmId}/datasets/${datasetId}/metadata.json`
     const exists = await gcsClient.exists(metadataPath)
@@ -361,13 +550,22 @@ router.put('/datasets/:datasetId', authenticate, async (req: AuthRequest, res) =
 
     const dataset = await gcsClient.readJSON<Dataset>(metadataPath)
 
-    // Update dataset
+    await appendDatasetRevision(farmId, datasetId, dataset, { id: userId, email: req.user?.email }, revisionMessage)
+
+    const sanitizedUpdates: Partial<Dataset> = { ...updates }
+    delete (sanitizedUpdates as any).revisionMessage
+
+    const resolvedFolderId = (sanitizedUpdates.folderId ?? dataset.folderId) || 'root'
+
     const updatedDataset: Dataset = {
       ...dataset,
-      ...updates,
+      ...sanitizedUpdates,
       id: datasetId, // Never allow ID to change
       farmId, // Never allow farmId to change
       updatedAt: new Date().toISOString(),
+      folderId: resolvedFolderId,
+      columnMapping: parsedColumnMapping ?? dataset.columnMapping,
+      originalHeaders: parsedHeaders ?? dataset.originalHeaders,
     }
 
     await gcsClient.writeJSON(metadataPath, updatedDataset)
@@ -446,6 +644,217 @@ router.delete('/datasets/:datasetId', authenticate, async (req: AuthRequest, res
     res.status(500).json({
       error: 'InternalError',
       message: 'Failed to delete dataset',
+    })
+  }
+})
+
+/**
+ * GET /api/farms/:farmId/datasets/:datasetId/revisions
+ * Return revision history for a dataset
+ */
+router.get('/farms/:farmId/datasets/:datasetId/revisions', authenticate, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id
+    const { farmId, datasetId } = req.params
+
+    const farm = await checkFarmAccess(farmId, userId)
+    if (!farm) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Farm not found or access denied',
+      })
+    }
+
+    const revisionsPath = getDatasetRevisionsPath(farmId, datasetId)
+    const exists = await gcsClient.exists(revisionsPath)
+
+    if (!exists) {
+      return res.json([])
+    }
+
+    const revisions = await gcsClient.readJSON<DatasetRevision[]>(revisionsPath)
+    res.json(revisions)
+  } catch (error: any) {
+    console.error('Error fetching dataset revisions:', error)
+    res.status(500).json({
+      error: 'InternalError',
+      message: 'Failed to fetch dataset revisions',
+    })
+  }
+})
+
+/**
+ * Dataset folder management endpoints
+ */
+router.get('/farms/:farmId/dataset-folders', authenticate, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id
+    const { farmId } = req.params
+
+    const farm = await checkFarmAccess(farmId, userId)
+    if (!farm) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Farm not found or access denied',
+      })
+    }
+
+    const folders = await readDatasetFolders(farmId)
+    res.json(folders)
+  } catch (error: any) {
+    console.error('Error fetching dataset folders:', error)
+    res.status(500).json({
+      error: 'InternalError',
+      message: 'Failed to fetch dataset folders',
+    })
+  }
+})
+
+router.post('/farms/:farmId/dataset-folders', authenticate, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id
+    const { farmId } = req.params
+    const { name, description, parentId } = req.body
+
+    if (!name || !name.trim()) {
+      return res.status(400).json({
+        error: 'ValidationError',
+        message: 'Folder name is required',
+      })
+    }
+
+    const farm = await checkFarmAccess(farmId, userId)
+    if (!farm) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Farm not found or access denied',
+      })
+    }
+
+    if (!userHasWriteAccess(farm, userId)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'You do not have permission to manage dataset folders for this farm',
+      })
+    }
+
+    const folders = await readDatasetFolders(farmId)
+    const now = new Date().toISOString()
+    const folder: DatasetFolder = {
+      id: uuidv4(),
+      farmId,
+      name: name.trim(),
+      description: description?.trim() || undefined,
+      parentId: parentId || 'root',
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    folders.push(folder)
+    await writeDatasetFolders(farmId, folders)
+
+    res.status(201).json(folder)
+  } catch (error: any) {
+    console.error('Error creating dataset folder:', error)
+    res.status(500).json({
+      error: 'InternalError',
+      message: 'Failed to create dataset folder',
+    })
+  }
+})
+
+router.put('/farms/:farmId/dataset-folders/:folderId', authenticate, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id
+    const { farmId, folderId } = req.params
+    const { name, description, parentId } = req.body
+
+    const farm = await checkFarmAccess(farmId, userId)
+    if (!farm) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Farm not found or access denied',
+      })
+    }
+
+    if (!userHasWriteAccess(farm, userId)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'You do not have permission to manage dataset folders for this farm',
+      })
+    }
+
+    const folders = await readDatasetFolders(farmId)
+    const index = folders.findIndex((folder) => folder.id === folderId)
+
+    if (index === -1) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Folder not found',
+      })
+    }
+
+    const updatedFolder: DatasetFolder = {
+      ...folders[index],
+      name: name ? name.trim() : folders[index].name,
+      description: description !== undefined ? description.trim() : folders[index].description,
+      parentId: parentId || folders[index].parentId,
+      updatedAt: new Date().toISOString(),
+    }
+
+    folders[index] = updatedFolder
+    await writeDatasetFolders(farmId, folders)
+
+    res.json(updatedFolder)
+  } catch (error: any) {
+    console.error('Error updating dataset folder:', error)
+    res.status(500).json({
+      error: 'InternalError',
+      message: 'Failed to update dataset folder',
+    })
+  }
+})
+
+router.delete('/farms/:farmId/dataset-folders/:folderId', authenticate, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id
+    const { farmId, folderId } = req.params
+
+    const farm = await checkFarmAccess(farmId, userId)
+    if (!farm) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Farm not found or access denied',
+      })
+    }
+
+    if (!userHasWriteAccess(farm, userId)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'You do not have permission to manage dataset folders for this farm',
+      })
+    }
+
+    const folders = await readDatasetFolders(farmId)
+    const index = folders.findIndex((folder) => folder.id === folderId)
+
+    if (index === -1) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Folder not found',
+      })
+    }
+
+    folders.splice(index, 1)
+    await writeDatasetFolders(farmId, folders)
+    await reassignDatasetsForFolder(farmId, folderId)
+
+    res.status(204).send()
+  } catch (error: any) {
+    console.error('Error deleting dataset folder:', error)
+    res.status(500).json({
+      error: 'InternalError',
+      message: 'Failed to delete dataset folder',
     })
   }
 })

@@ -19,7 +19,12 @@ export function useBlocks(farmId: string) {
       setBlocksGeoJSON(response.data)
       // Extract blocks from features
       if (response.data.features) {
-        setBlocks(response.data.features.map((f: any) => f.properties))
+        setBlocks(
+          response.data.features.map((f: any) => ({
+            ...(f.properties || {}),
+            geometry: f.geometry,
+          }))
+        )
       }
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to fetch blocks')

@@ -3,7 +3,8 @@ import MapboxDraw from '@mapbox/mapbox-gl-draw'
 import MapboxGeocoder from '@mapbox/mapbox-gl-geocoder'
 
 // Initialize Mapbox token
-mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || ''
+mapboxgl.accessToken =
+  process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || process.env.VITE_MAPBOX_ACCESS_TOKEN || ''
 
 export interface MapConfig {
   container: string | HTMLElement
@@ -68,7 +69,8 @@ export class MapService {
   addGeocoder(): MapboxGeocoder | null {
     if (!this.map) return null
 
-    const token = mapboxgl.accessToken || import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || ''
+    const token =
+      mapboxgl.accessToken || process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || process.env.VITE_MAPBOX_ACCESS_TOKEN || ''
     this.geocoder = new MapboxGeocoder({
       accessToken: token,
       mapboxgl: mapboxgl as any,

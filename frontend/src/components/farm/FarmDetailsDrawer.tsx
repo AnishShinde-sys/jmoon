@@ -1,32 +1,44 @@
-import { useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+"use client"
+
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useUI } from '@/context/UIContext'
 import { Farm } from '@/types/farm'
 import Drawer from '../ui/Drawer'
-import { 
-  MapIcon, 
-  ChartBarIcon, 
-  UserGroupIcon,
-  PencilIcon
-} from '@heroicons/react/24/outline'
+import { MapIcon, ChartBarIcon, UserGroupIcon } from '@heroicons/react/24/outline'
 import apiClient from '@/lib/apiClient'
 
 const DRAWER_NAME = 'farmDetails'
 
-export default function FarmDetailsDrawer() {
-  const { farmId } = useParams<{ farmId: string }>()
-  const navigate = useNavigate()
+interface FarmDetailsDrawerProps {
+  farmId: string
+}
+
+export default function FarmDetailsDrawer({ farmId }: FarmDetailsDrawerProps) {
+  const router = useRouter()
   const { drawers, closeDrawer, openDrawer } = useUI()
   const [farm, setFarm] = useState<Farm | null>(null)
 
-  // Load farm details when drawer opens
-  if (drawers[DRAWER_NAME] && !farm) {
-    apiClient.get(`/api/farms/${farmId}`).then(response => {
-      setFarm(response.data)
-    }).catch(error => {
-      console.error('Failed to load farm:', error)
-    })
-  }
+  useEffect(() => {
+    if (!drawers[DRAWER_NAME] || !farmId) return
+
+    let isCancelled = false
+
+    apiClient
+      .get(`/api/farms/${farmId}`)
+      .then((response) => {
+        if (!isCancelled) {
+          setFarm(response.data)
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load farm:', error)
+      })
+
+    return () => {
+      isCancelled = true
+    }
+  }, [drawers[DRAWER_NAME], farmId])
 
   const handleAction = (action: string) => {
     closeDrawer(DRAWER_NAME)
