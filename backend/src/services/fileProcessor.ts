@@ -11,7 +11,6 @@ import * as toGeoJSON from 'togeojson'
 import JSZip from 'jszip'
 import shp from 'shpjs'
 import sharp from 'sharp'
-import csv2geojson from 'csv2geojson'
 import proj4 from 'proj4'
 import epsg from 'epsg'
 import type { FeatureCollection, Feature, Point, Polygon } from 'geojson'
@@ -46,12 +45,28 @@ export async function processCSV(buffer: Buffer): Promise<ProcessingResult> {
       skipEmptyLines: true,
       complete: (results) => {
         try {
-          const data = results.data as any[]
+          const rawData = results.data as any[]
+
+          const data = rawData
+            .filter((row) => row && typeof row === 'object')
+            .map((row) => {
+              const normalized: Record<string, any> = {}
+              Object.entries(row).forEach(([key, value]) => {
+                const normalizedKey = typeof key === 'string' ? key.trim() : key
+                if (normalizedKey) {
+                  normalized[normalizedKey] = value
+                }
+              })
+              return normalized
+            })
 
           // Find coordinate columns
           const headers = Object.keys(data[0] || {})
           let latField = headers.find((h) => h.toLowerCase() === 'latitude' || h.toLowerCase() === 'lat' || h.toLowerCase() === 'y')
-          let lonField = headers.find((h) => h.toLowerCase() === 'longitude' || h.toLowerCase() === 'lon' || h.toLowerCase() === 'x')
+          let lonField = headers.find((h) => {
+            const key = h.toLowerCase()
+            return key === 'longitude' || key === 'lon' || key === 'lng' || key === 'long' || key === 'x'
+          })
           
           // Check for Lambert 93 (EPSG:2154)
           let isLambert93 = false
@@ -88,15 +103,44 @@ export async function processCSV(buffer: Buffer): Promise<ProcessingResult> {
             }
           }
 
-          // Convert to GeoJSON using csv2geojson
-          const geojson = csv2geojson.csv2geojson(data, {
-            latfield: latField,
-            lonfield: lonField,
-            delimiter: ',',
-          }) as FeatureCollection
+          const features: Feature<Point, Record<string, any>>[] = []
 
-          if (!geojson || !geojson.features || geojson.features.length === 0) {
-            throw new Error('No valid coordinates found in CSV')
+          for (const row of data) {
+            if (!row || typeof row !== 'object') {
+              continue
+            }
+
+            const rawLat = row[latField]
+            const rawLon = row[lonField]
+
+            const lat = typeof rawLat === 'number' ? rawLat : Number(rawLat)
+            const lon = typeof rawLon === 'number' ? rawLon : Number(rawLon)
+
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+              continue
+            }
+
+            const properties: Record<string, any> = { ...row }
+            delete properties[latField]
+            delete properties[lonField]
+
+            features.push({
+              type: 'Feature',
+              geometry: {
+                type: 'Point',
+                coordinates: [lon, lat],
+              },
+              properties,
+            })
+          }
+
+          if (features.length === 0) {
+            throw new Error('No valid coordinates found in CSV rows')
+          }
+
+          const geojson: FeatureCollection = {
+            type: 'FeatureCollection',
+            features,
           }
 
           const bounds = calculateBounds(geojson)
@@ -104,7 +148,7 @@ export async function processCSV(buffer: Buffer): Promise<ProcessingResult> {
 
           resolve({
             geojson,
-            recordCount: geojson.features.length,
+            recordCount: features.length,
             bounds,
             fields,
           })

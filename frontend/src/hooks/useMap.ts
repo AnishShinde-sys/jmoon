@@ -36,6 +36,17 @@ export function useMap() {
     [map]
   )
 
+  const setPaintProperty = useCallback(
+    (layerId: string, property: string, value: any) => {
+      if (!map) return
+
+      if (map.getLayer(layerId)) {
+        map.setPaintProperty(layerId, property, value as any)
+      }
+    },
+    [map]
+  )
+
   const removeLayer = useCallback(
     (layerId: string) => {
       if (!map) return
@@ -105,11 +116,28 @@ export function useMap() {
     [draw]
   )
 
-  const clearDrawing = useCallback(() => {
-    if (!draw) return
+  const clearDrawing = useCallback(
+    (options?: { includePersisted?: boolean }) => {
+      if (!draw) return
 
-    draw.deleteAll()
-  }, [draw])
+      const includePersisted = options?.includePersisted ?? false
+      const features = draw.getAll().features
+      if (!features.length) return
+
+      const idsToDelete = features
+        .filter((feature: any) => {
+          const isPersisted = Boolean(feature?.properties?.__persisted)
+          return includePersisted ? true : !isPersisted
+        })
+        .map((feature) => feature.id)
+        .filter((id): id is string => typeof id === 'string')
+
+      if (idsToDelete.length) {
+        draw.delete(idsToDelete)
+      }
+    },
+    [draw]
+  )
 
   return {
     map,
@@ -118,6 +146,7 @@ export function useMap() {
     setDraw,
     addGeoJSONSource,
     addLayer,
+    setPaintProperty,
     removeLayer,
     removeSource,
     fitBounds,

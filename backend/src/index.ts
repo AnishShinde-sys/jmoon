@@ -24,11 +24,20 @@ import { errorHandler } from './middleware/errorHandler'
 const app = express()
 const PORT = process.env.PORT || 8080
 
-// Middleware
-app.use(helmet())
-app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map((origin) => origin.trim())
+  : ['http://localhost:3000']
+
+const corsOptions = {
+  origin: allowedOrigins,
   credentials: true,
+}
+
+// Middleware
+app.use(cors(corsOptions))
+app.options('*', cors(corsOptions))
+app.use(helmet({
+  crossOriginResourcePolicy: false,
 }))
 app.use(morgan('combined'))
 app.use(express.json())

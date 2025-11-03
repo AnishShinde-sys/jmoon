@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import {
   ChartBarIcon,
   CubeIcon,
@@ -49,6 +49,8 @@ export default function PluginsDrawer({ farmId, farmOwnerId, initialEnabled, onP
   const [selectedPlugin, setSelectedPlugin] = useState<PluginDefinition | null>(null)
   const [pluginUrl, setPluginUrl] = useState<string | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  const hasLoadedOnceRef = useRef(false)
+  const onPluginsChangeRef = useRef(onPluginsChange)
 
   const isDrawerOpen = Boolean(drawers[DRAWER_NAME] || drawers[DRAWER_NAME_BLOCKS])
   const canManage = Boolean(user && farmOwnerId && user.id === farmOwnerId)
@@ -58,6 +60,10 @@ export default function PluginsDrawer({ farmId, farmOwnerId, initialEnabled, onP
       setEnabledPluginIds(initialEnabled)
     }
   }, [initialEnabled])
+
+  useEffect(() => {
+    onPluginsChangeRef.current = onPluginsChange
+  }, [onPluginsChange])
 
   const fetchPlugins = useCallback(async () => {
     if (!farmId) return
@@ -75,14 +81,15 @@ export default function PluginsDrawer({ farmId, farmOwnerId, initialEnabled, onP
 
       setPlugins(directory)
       setEnabledPluginIds(enabled)
-      onPluginsChange?.(enabled)
+      hasLoadedOnceRef.current = true
+      onPluginsChangeRef.current?.(enabled)
     } catch (err: any) {
       const message = err?.response?.data?.message || 'Failed to load plugins'
       setError(message)
     } finally {
       setLoading(false)
     }
-  }, [farmId, onPluginsChange])
+  }, [farmId])
 
   useEffect(() => {
     if (isDrawerOpen) {
@@ -142,7 +149,7 @@ export default function PluginsDrawer({ farmId, farmOwnerId, initialEnabled, onP
 
         const nextEnabled = response.data?.enabled || []
         setEnabledPluginIds(nextEnabled)
-        onPluginsChange?.(nextEnabled)
+        onPluginsChangeRef.current?.(nextEnabled)
         showAlert(
           shouldEnable
             ? `${plugin.name} activated for this farm.`
@@ -156,7 +163,7 @@ export default function PluginsDrawer({ farmId, farmOwnerId, initialEnabled, onP
         setTogglingId(null)
       }
     },
-    [farmId, onPluginsChange, showAlert]
+    [farmId, showAlert]
   )
 
   const handleCloseDrawer = useCallback(() => {
@@ -192,7 +199,7 @@ export default function PluginsDrawer({ farmId, farmOwnerId, initialEnabled, onP
             </div>
           )}
 
-          {loading ? (
+          {!hasLoadedOnceRef.current && loading ? (
             <div className="flex flex-col items-center gap-3 py-10 text-sm text-gray-500">
               <div className="spinner" />
               Loading plugins…
@@ -202,7 +209,12 @@ export default function PluginsDrawer({ farmId, farmOwnerId, initialEnabled, onP
               {error}
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="relative space-y-3">
+              {loading && hasLoadedOnceRef.current && (
+                <div className="absolute inset-0 z-[1] flex items-center justify-center rounded-md bg-white/70">
+                  <div className="spinner" />
+                </div>
+              )}
               {sortedPlugins.map((plugin) => {
                 const IconComponent = plugin.icon && iconMap[plugin.icon] ? iconMap[plugin.icon] : ChartBarIcon
                 const isEnabled = enabledSet.has(plugin.id)

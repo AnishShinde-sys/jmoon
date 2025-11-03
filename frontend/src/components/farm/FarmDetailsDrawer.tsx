@@ -3,10 +3,12 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useUI } from '@/context/UIContext'
+import { useUserProfile } from '@/context/UserProfileContext'
 import { Farm } from '@/types/farm'
 import Drawer from '../ui/Drawer'
 import { MapIcon, ChartBarIcon, UserGroupIcon } from '@heroicons/react/24/outline'
 import apiClient from '@/lib/apiClient'
+import { formatArea } from '@/lib/utils'
 
 const DRAWER_NAME = 'farmDetails'
 
@@ -17,7 +19,10 @@ interface FarmDetailsDrawerProps {
 export default function FarmDetailsDrawer({ farmId }: FarmDetailsDrawerProps) {
   const router = useRouter()
   const { drawers, closeDrawer, openDrawer } = useUI()
+  const { profile } = useUserProfile()
   const [farm, setFarm] = useState<Farm | null>(null)
+
+  const measurementSystem = profile?.measurementSystem ?? 'Metric'
 
   useEffect(() => {
     if (!drawers[DRAWER_NAME] || !farmId) return
@@ -130,7 +135,7 @@ export default function FarmDetailsDrawer({ farmId }: FarmDetailsDrawerProps) {
               <div>
                 <p className="text-xs text-gray-500">Total Area</p>
                 <p className="text-sm font-medium">
-                  {farm.totalArea ? `${(farm.totalArea / 10000).toFixed(2)} ha` : 'N/A'}
+                  {formatArea(farm.totalArea ?? null, measurementSystem)}
                 </p>
               </div>
               <div>

@@ -1,18 +1,11 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import {
-  AdjustmentsHorizontalIcon,
-  BellIcon,
-  ChevronRightIcon,
-  MegaphoneIcon,
-  UserCircleIcon,
-} from '@heroicons/react/24/outline'
+import { AdjustmentsHorizontalIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
 import bbox from '@turf/bbox'
 
-import CreateBlockDrawer from '@/components/blocks/CreateBlockDrawer'
-import BlockDetailsDrawer from '@/components/blocks/BlockDetailsDrawer'
+import type { BlockEditorState } from '@/components/blocks/BlockEditorPanel'
 import BlockRevisionsDrawer from '@/components/blocks/BlockRevisionsDrawer'
 import BlockRevisionPreviewDrawer from '@/components/blocks/BlockRevisionPreviewDrawer'
 import DatasetDrawer from '@/components/datasets/DatasetDrawer'
@@ -34,7 +27,6 @@ import DrawingToolbar from '@/components/map/DrawingToolbar'
 import MapContainer from '@/components/map/MapContainer'
 import MapLayersDrawer from '@/components/map/MapLayersDrawer'
 import MapLegend from '@/components/map/MapLegend'
-import TerrainToggle from '@/components/map/TerrainToggle'
 import { useUI } from '@/context/UIContext'
 import { useMapContext } from '@/context/MapContext'
 import { useBlocks } from '@/hooks/useBlocks'
@@ -49,9 +41,15 @@ interface FarmPageClientProps {
 
 export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientProps) {
   const router = useRouter()
-  const { showAlert, openDrawer, closeDrawer, drawers, openModal } = useUI()
+  const { showAlert, openDrawer, closeDrawer, drawers } = useUI()
   const { map, draw } = useMapContext()
-  const { blocksGeoJSON: blocksJSONFromHook } = useBlocks(farmId)
+  const {
+    blocksGeoJSON: blocksJSONFromHook,
+    refetch: refetchBlocks,
+    createBlock,
+    updateBlock,
+    deleteBlock,
+  } = useBlocks(farmId)
 
   const [blocksGeoJSON, setBlocksGeoJSON] = useState<any[]>([])
   const [farm, setFarm] = useState<Farm | null>(null)
@@ -59,6 +57,61 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
   const [isDrawing, setIsDrawing] = useState(false)
   const [hasDrawing, setHasDrawing] = useState(false)
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
+  const [selectedBlockData, setSelectedBlockData] = useState<any | null>(null)
+  const [blockEditorState, setBlockEditorState] = useState<BlockEditorState>({ mode: 'hidden' })
+
+  const normalizeCustomFields = useCallback((fields: any[] | undefined | null) => {
+    if (!Array.isArray(fields)) return []
+    return fields.map((field: any, index: number) => ({
+      ...field,
+      key: field?.key ?? `${field?.label ?? 'field'}_${index}`,
+    }))
+  }, [])
+
+  const normalizeBlockPayload = useCallback(
+    (blockPayload: any | undefined | null) => {
+      if (!blockPayload) return null
+
+      const customFields = normalizeCustomFields(blockPayload.customFields)
+      return {
+        ...blockPayload,
+        customFields,
+      }
+    },
+    [normalizeCustomFields]
+  )
+
+  const openBlockEditor = useCallback(
+    (state: BlockEditorState) => {
+      setBlockEditorState(state)
+
+      if (state.mode === 'edit') {
+        if (state.block) {
+          const normalized = normalizeBlockPayload(state.block)
+          if (normalized) {
+            setSelectedBlockId(String(normalized.id))
+            setSelectedBlockData(normalized)
+          }
+        } else if (state.blockId) {
+          setSelectedBlockId(String(state.blockId))
+          setSelectedBlockData(null)
+        }
+      }
+
+      if (state.mode === 'create') {
+        setSelectedBlockId(null)
+        setSelectedBlockData(null)
+      }
+    },
+    [normalizeBlockPayload]
+  )
+
+  const getBlockFeatureId = useCallback((feature: any): string | null => {
+    if (!feature) return null
+    const rawId = feature.id ?? feature.properties?.id ?? feature.properties?.blockId
+    if (rawId === undefined || rawId === null) return null
+    return String(rawId)
+  }, [])
 
   // Fetch farm details
   useEffect(() => {
@@ -104,13 +157,55 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
     const handleDrawCreate = () => {
       const features = draw.getAll()
       if (features.features.length > 0) {
+        features.features.forEach((feature: any) => {
+          if (!feature?.properties?.__persisted && feature?.id) {
+            try {
+              draw.setFeatureProperty(feature.id, '__draft', true)
+            } catch (error) {
+              console.warn('Failed to tag draft feature', error)
+            }
+          }
+        })
         setHasDrawing(true)
         setIsDrawing(false)
-        closeDrawer('createBlock')
-        setTimeout(() => {
-          openDrawer('createBlock')
-        }, 100)
+        openBlockEditor({ mode: 'create' })
       }
+    }
+
+    const handleDrawUpdate = (event: any) => {
+      const updatedFeatures = (event?.features || []) as any[]
+      if (!updatedFeatures.length) return
+
+      setBlocksGeoJSON((prev) => {
+        if (!Array.isArray(prev) || prev.length === 0) return prev
+
+        let didChange = false
+        const updatesById = new Map<string, any>()
+        updatedFeatures.forEach((feature) => {
+          const featureId = getBlockFeatureId(feature)
+          if (featureId) {
+            updatesById.set(featureId, feature)
+          }
+        })
+
+        if (updatesById.size === 0) return prev
+
+        const next = prev.map((feature: any) => {
+          const featureId = getBlockFeatureId(feature)
+          if (!featureId) return feature
+          const updated = updatesById.get(featureId)
+          if (updated && updated.geometry) {
+            didChange = true
+            return {
+              ...feature,
+              geometry: updated.geometry,
+            }
+          }
+          return feature
+        })
+
+        return didChange ? next : prev
+      })
     }
 
     const handleDrawDelete = () => {
@@ -119,13 +214,15 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
     }
 
     map.on('draw.create', handleDrawCreate)
+    map.on('draw.update', handleDrawUpdate)
     map.on('draw.delete', handleDrawDelete)
 
     return () => {
       map.off('draw.create', handleDrawCreate)
+      map.off('draw.update', handleDrawUpdate)
       map.off('draw.delete', handleDrawDelete)
     }
-  }, [map, draw, openDrawer, closeDrawer])
+  }, [map, draw, getBlockFeatureId, openBlockEditor])
 
   useEffect(() => {
     const handleLaunchCollector = (event: Event) => {
@@ -212,7 +309,17 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
 
   const clearDrawing = () => {
     if (!draw) return
-    draw.deleteAll()
+
+    const draftFeatureIds = draw
+      .getAll()
+      .features.filter((feature: any) => !feature?.properties?.__persisted)
+      .map((feature: any) => feature.id)
+      .filter((id): id is string => typeof id === 'string')
+
+    if (draftFeatureIds.length) {
+      draw.delete(draftFeatureIds)
+    }
+
     setIsDrawing(false)
     setHasDrawing(false)
   }
@@ -223,29 +330,114 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
     draw.changeMode('simple_select')
   }
 
-  const handleBlockClick = (blockId: string) => {
+  const handleBlockClick = (blockId: string, feature?: any) => {
     setSelectedBlockId(blockId)
     closeDrawer('farmDetails')
-    setTimeout(() => {
-      openDrawer('blockDetails', blockId)
-    }, 100)
 
-    if (map && blocksGeoJSON.length > 0) {
-      const blockFeature = blocksGeoJSON.find((b: any) => {
+    let blockFeature = feature
+
+    if (!blockFeature && blocksGeoJSON.length > 0) {
+      blockFeature = blocksGeoJSON.find((b: any) => {
         const id = b.id || b.properties?.id
         return id === blockId
       })
+    }
 
-      if (blockFeature?.geometry) {
-        try {
-          const bounds = bbox(blockFeature as any)
-          map.fitBounds(bounds as [number, number, number, number], { padding: 100, duration: 1000 })
-        } catch (error) {
-          console.error('Error flying to block:', error)
-        }
+    if (map && blockFeature?.geometry) {
+      try {
+        const bounds = bbox(blockFeature as any)
+        map.fitBounds(bounds as [number, number, number, number], { padding: 100, duration: 1000 })
+      } catch (error) {
+        console.error('Error flying to block:', error)
       }
     }
+
+    const blockPayload = blockFeature
+      ? {
+          id: blockId,
+          ...(blockFeature.properties || {}),
+          geometry: blockFeature.geometry,
+        }
+      : undefined
+
+    if (blockPayload) {
+      const normalized = normalizeBlockPayload(blockPayload)
+      openBlockEditor({ mode: 'edit', block: normalized || undefined, blockId })
+    } else {
+      openBlockEditor({ mode: 'edit', blockId })
+    }
   }
+
+  const handleBlockSelectOnMap = (blockId: string, feature?: any) => {
+    handleBlockClick(blockId, feature)
+  }
+
+  const handleOpenBlockDrawer = () => {
+    if (selectedBlockData) {
+      openBlockEditor({ mode: 'edit', block: selectedBlockData, blockId: selectedBlockData.id })
+      return
+    }
+
+    if (blocksGeoJSON.length > 0) {
+      const firstFeature = blocksGeoJSON[0]
+      const firstId = firstFeature?.id || firstFeature?.properties?.id
+      if (firstId) {
+        handleBlockClick(String(firstId), firstFeature)
+        return
+      }
+    }
+
+    showAlert('Select or draw a block to edit.', 'info')
+  }
+  useEffect(() => {
+    if (!selectedBlockId) {
+      setSelectedBlockData(null)
+      return
+    }
+
+    const blockFeature = blocksGeoJSON.find((feature: any) => {
+      const id = feature.id || feature.properties?.id
+      return String(id) === String(selectedBlockId)
+    })
+
+    if (blockFeature) {
+      const payload = {
+        id: selectedBlockId,
+        ...(blockFeature.properties || {}),
+        geometry: blockFeature.geometry,
+      }
+
+      const customFields = Array.isArray(payload.customFields)
+        ? payload.customFields.map((field: any, index: number) => ({
+            ...field,
+            key: field?.key ?? `${field?.label ?? 'field'}_${index}`,
+          }))
+        : []
+
+      const normalized = {
+        ...payload,
+        customFields,
+      }
+
+      setSelectedBlockData(normalized)
+
+      if (
+        blockEditorState.mode === 'edit' &&
+        (blockEditorState.blockId || blockEditorState.block?.id) === selectedBlockId
+      ) {
+        openBlockEditor({ mode: 'edit', block: normalized, blockId: selectedBlockId })
+      }
+    } else {
+      setSelectedBlockData(null)
+      if (
+        blockEditorState.mode === 'edit' &&
+        (blockEditorState.blockId || blockEditorState.block?.id) === selectedBlockId
+      ) {
+        openBlockEditor({ mode: 'hidden' })
+      }
+    }
+  }, [blocksGeoJSON, selectedBlockId, blockEditorState, openBlockEditor])
+
 
   const handleCreateBlock = () => {
     startDrawing()
@@ -294,9 +486,7 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
 
   return (
     <div className="h-screen flex relative overflow-hidden">
-      <CreateBlockDrawer farmId={farmId} />
-      <BlockDetailsDrawer farmId={farmId} />
-      <BlockRevisionsDrawer farmId={farmId} />
+      <BlockRevisionsDrawer farmId={farmId} onOpenBlockEditor={openBlockEditor} />
       <BlockRevisionPreviewDrawer />
       <DatasetDrawer farmId={farmId} />
       <DatasetDetailsDrawer />
@@ -339,15 +529,23 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
         onBlockClick={handleBlockClick}
         onVizUpdate={handleVizUpdate}
         isOpen={sidebarOpen}
+        onOpenBlockDrawer={handleOpenBlockDrawer}
+        selectedBlockId={selectedBlockId}
+        blockEditorState={blockEditorState}
+        onBlockEditorStateChange={openBlockEditor}
+        createBlock={createBlock}
+        updateBlock={updateBlock}
+        deleteBlock={deleteBlock}
+        refetchBlocks={refetchBlocks}
       />
 
       <div className={`absolute inset-0 transition-all duration-300 ${sidebarOpen ? 'pl-0' : 'pl-0'}`}>
         <MapContainer
           center={farmCenter}
-          zoom={13}
+          zoom={11.7}
           enableDrawing
           blocks={blocksGeoJSON}
-          onBlockClick={handleBlockClick}
+          onBlockSelect={handleBlockSelectOnMap}
           vizSettings={farm.vizSettings}
           selectedBlockId={selectedBlockId}
         >
@@ -360,31 +558,14 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
           />
         </MapContainer>
 
-        <div className="absolute top-24 right-6 z-40 flex flex-col items-end gap-2">
-          <TerrainToggle />
+        <div className="absolute bottom-6 right-6 z-40 flex max-h-[60vh] flex-col items-end gap-2 overflow-y-auto pr-1">
           <button
             onClick={() => openDrawer('mapLayers')}
-            className="flex items-center gap-2 rounded-md bg-white/90 px-3 py-2 text-sm font-medium text-gray-700 shadow-md transition hover:bg-white"
+            className="flex items-center justify-center rounded-full bg-white/90 p-3 text-gray-700 shadow-md transition hover:bg-white"
+            title="Layers & Terrain"
+            aria-label="Layers and terrain"
           >
-            <AdjustmentsHorizontalIcon className="h-4 w-4" /> Layers &amp; Terrain
-          </button>
-          <button
-            onClick={() => openDrawer('notifications')}
-            className="flex items-center gap-2 rounded-md bg-white/90 px-3 py-2 text-sm font-medium text-gray-700 shadow-md transition hover:bg-white"
-          >
-            <BellIcon className="h-4 w-4" /> Notifications
-          </button>
-          <button
-            onClick={() => openDrawer('userDetails')}
-            className="flex items-center gap-2 rounded-md bg-white/90 px-3 py-2 text-sm font-medium text-gray-700 shadow-md transition hover:bg-white"
-          >
-            <UserCircleIcon className="h-4 w-4" /> Account
-          </button>
-          <button
-            onClick={() => openModal('feedback')}
-            className="flex items-center gap-2 rounded-md bg-white/90 px-3 py-2 text-sm font-medium text-gray-700 shadow-md transition hover:bg-white"
-          >
-            <MegaphoneIcon className="h-4 w-4" /> Feedback
+            <AdjustmentsHorizontalIcon className="h-5 w-5" />
           </button>
         </div>
 

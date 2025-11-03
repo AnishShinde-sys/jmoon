@@ -17,23 +17,27 @@ export default function DrawingToolbar({ onStartDrawing, onClear, onFinish, isDr
   }
 
   return (
-    <div className="absolute top-32 right-4 flex flex-col gap-2 bg-white rounded-lg shadow-lg p-2">
+    <div className="absolute top-32 right-4 mapboxgl-ctrl mapboxgl-ctrl-group">
       {isDrawing && (
         <button
+          type="button"
           onClick={onFinish}
-          className="flex items-center justify-center w-10 h-10 bg-green-600 text-white hover:bg-green-700 rounded transition-colors"
+          className="mapboxgl-ctrl-icon inline-flex h-9 w-9 items-center justify-center !bg-transparent !bg-none transition hover:bg-gray-100"
           title="Finish Drawing"
         >
-          <CheckIcon className="w-5 h-5" />
+          <CheckIcon className="h-5 w-5 text-green-600" aria-hidden="true" />
+          <span className="sr-only">Finish Drawing</span>
         </button>
       )}
       {hasDrawing && (
         <button
+          type="button"
           onClick={onClear}
-          className="flex items-center justify-center w-10 h-10 bg-red-600 text-white hover:bg-red-700 rounded transition-colors"
+          className="mapboxgl-ctrl-icon inline-flex h-9 w-9 items-center justify-center !bg-transparent !bg-none transition hover:bg-gray-100"
           title="Clear Drawing"
         >
-          <TrashIcon className="w-5 h-5" />
+          <TrashIcon className="h-5 w-5 text-red-600" aria-hidden="true" />
+          <span className="sr-only">Clear Drawing</span>
         </button>
       )}
     </div>

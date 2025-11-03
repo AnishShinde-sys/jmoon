@@ -1,15 +1,25 @@
+import { XMarkIcon } from '@heroicons/react/24/outline'
 import { ReactNode, useEffect } from 'react'
 
 interface DrawerProps {
   isOpen: boolean
   onClose: () => void
-  title?: string
+  title?: ReactNode
   children: ReactNode
   position?: 'left' | 'right'
   showBackdrop?: boolean
+  headerActions?: ReactNode
 }
 
-export default function Drawer({ isOpen, onClose, title, children, position = 'right', showBackdrop = true }: DrawerProps) {
+export default function Drawer({
+  isOpen,
+  onClose,
+  title,
+  children,
+  position = 'right',
+  showBackdrop = true,
+  headerActions,
+}: DrawerProps) {
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) {
@@ -42,19 +52,26 @@ export default function Drawer({ isOpen, onClose, title, children, position = 'r
         style={{ maxWidth: '400px' }}
       >
         {title && (
-          <div className="px-6 py-4 border-b border-gray-200">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-gray-900">{title}</h2>
-              <button
-                onClick={onClose}
-                className="text-gray-400 hover:text-gray-600"
-              >
-                ✕
-              </button>
+          <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-lg font-semibold text-gray-900">
+                {title}
+              </div>
+              <div className="flex items-center gap-2">
+                {headerActions}
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-500 shadow-sm transition hover:border-gray-300 hover:text-gray-700"
+                  aria-label="Close drawer"
+                >
+                  <XMarkIcon className="h-5 w-5" />
+                </button>
+              </div>
             </div>
           </div>
         )}
-        <div className="px-6 py-4 overflow-y-auto h-full">{children}</div>
+        <div className="px-5 py-4 overflow-y-auto h-full">{children}</div>
       </div>
     </>
   )

@@ -6,7 +6,6 @@ import { UIProvider } from '@/context/UIContext'
 import { MapProvider } from '@/context/MapContext'
 import Alert from '@/components/ui/Alert'
 import { UserProfileProvider } from '@/context/UserProfileContext'
-import UserDetailsDrawer from '@/components/user/UserDetailsDrawer'
 import UserSettingsDrawer from '@/components/user/UserSettingsDrawer'
 import NotificationsDrawer from '@/components/user/NotificationsDrawer'
 import FeedbackModal from '@/components/user/FeedbackModal'
@@ -23,7 +22,6 @@ export function Providers({ children }: ProvidersProps) {
         <UserProfileProvider>
           <MapProvider>
             <Alert />
-            <UserDetailsDrawer />
             <UserSettingsDrawer />
             <NotificationsDrawer />
             <FeedbackModal />
@@ -35,6 +33,8 @@ export function Providers({ children }: ProvidersProps) {
     </AuthProvider>
   )
 }
+
+
 
 
 

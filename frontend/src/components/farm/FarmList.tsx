@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation'
 
 import { Farm } from '@/types/farm'
+import { MapPinIcon } from '@heroicons/react/24/outline'
 
 interface FarmListProps {
   farms: Farm[]
@@ -42,45 +43,54 @@ export default function FarmList({ farms, loading, onCreateFarm }: FarmListProps
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-      {farms.map((farm) => (
-        <div
-          key={farm.id}
-          onClick={() => router.push(`/farm/${farm.id}`)}
-          className="card cursor-pointer hover:shadow-xl transition-shadow duration-200"
-        >
-          <div className="card-body">
-            <div className="flex items-start justify-between mb-3">
-              <h3 className="text-lg font-semibold text-gray-900">{farm.name}</h3>
-              <span className="text-2xl">🌾</span>
-            </div>
+      {farms.map((farm) => {
+        const locationLabel = farm.locationName?.trim()
+          ? farm.locationName
+          : farm.geolocation
+          ? `${farm.geolocation.latitude.toFixed(3)}°, ${farm.geolocation.longitude.toFixed(3)}°`
+          : null
 
-            {farm.description && (
-              <p className="text-sm text-gray-600 mb-4 line-clamp-2">{farm.description}</p>
-            )}
-
-            {farm.geolocation && (
-              <div className="text-xs text-gray-500 mb-2">
-                📍 {farm.geolocation.latitude.toFixed(4)}, {farm.geolocation.longitude.toFixed(4)}
+        return (
+          <div
+            key={farm.id}
+            onClick={() => router.push(`/farm/${farm.id}`)}
+            className="card cursor-pointer hover:shadow-xl transition-shadow duration-200"
+          >
+            <div className="card-body">
+              <div className="flex items-start justify-between mb-3">
+                <h3 className="text-lg font-semibold text-gray-900">{farm.name}</h3>
+                <span className="text-2xl">🌾</span>
               </div>
-            )}
 
-            <div className="flex items-center justify-between pt-3 border-t border-gray-200">
-              <span className="text-xs text-gray-400">
-                Updated {new Date(farm.updatedAt).toLocaleDateString()}
-              </span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  router.push(`/farm/${farm.id}`)
-                }}
-                className="text-primary-600 text-xs hover:text-primary-700"
-              >
-                View →
-              </button>
+              {farm.description && (
+                <p className="text-sm text-gray-600 mb-4 line-clamp-2">{farm.description}</p>
+              )}
+
+              {locationLabel && (
+                <div className="flex items-center gap-1 text-xs text-gray-500 mb-2">
+                  <MapPinIcon className="h-4 w-4" />
+                  <span>{locationLabel}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-3 border-t border-gray-200">
+                <span className="text-xs text-gray-400">
+                  Updated {new Date(farm.updatedAt).toLocaleDateString()}
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    router.push(`/farm/${farm.id}`)
+                  }}
+                  className="text-primary-600 text-xs hover:text-primary-700"
+                >
+                  View →
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

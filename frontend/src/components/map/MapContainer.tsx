@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, memo } from 'react'
+import { useCallback, useEffect, useRef, useState, memo } from 'react'
 import mapboxgl from 'mapbox-gl'
 import MapboxDraw from '@mapbox/mapbox-gl-draw'
 import { useMapContext } from '@/context/MapContext'
@@ -13,7 +13,7 @@ interface MapContainerProps {
   onDrawDelete?: (e: any) => void
   enableDrawing?: boolean
   blocks?: any[]
-  onBlockClick?: (blockId: string) => void
+  onBlockSelect?: (blockId: string, feature: any) => void
   children?: React.ReactNode
   vizSettings?: {
     colorOpacity: number
@@ -33,7 +33,7 @@ function MapContainer({
   onDrawDelete,
   enableDrawing = false,
   blocks = [],
-  onBlockClick,
+  onBlockSelect,
   children,
   vizSettings,
   selectedBlockId = null,
@@ -41,6 +41,13 @@ function MapContainer({
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const { map, setMap, draw, setDraw } = useMapContext()
   const [tokenMissing, setTokenMissing] = useState(false)
+
+  const getBlockIdentifier = useCallback((feature: any): string | null => {
+    if (!feature) return null
+    const rawId = feature.id ?? feature.properties?.id ?? feature.properties?.blockId
+    if (rawId === undefined || rawId === null) return null
+    return String(rawId)
+  }, [])
 
   if (!mapboxgl.accessToken && process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN) {
     mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN
@@ -115,6 +122,64 @@ function MapContainer({
     }
   }, []) // Remove dependencies to prevent re-initialization
 
+  // Keep persisted farm blocks mirrored inside Mapbox Draw so they can be edited
+  useEffect(() => {
+    if (!draw || typeof (draw as any).getAll !== 'function') return
+
+    const allFeatures = draw.getAll()
+    if (!allFeatures || !Array.isArray(allFeatures.features)) return
+
+    const persistedFeatures = allFeatures.features.filter((feature: any) => feature?.properties?.__persisted)
+
+    const existingIds = new Set(persistedFeatures.map((feature: any) => String(feature.id)))
+    const incomingIds = new Set<string>()
+
+    if (Array.isArray(blocks)) {
+      blocks.forEach((feature: any) => {
+        if (!feature?.geometry) return
+        const blockId = getBlockIdentifier(feature)
+        if (!blockId) return
+        incomingIds.add(blockId)
+
+        if (!existingIds.has(blockId)) {
+          try {
+            draw.add({
+              id: blockId,
+              type: 'Feature',
+              geometry: feature.geometry,
+              properties: {
+                ...feature.properties,
+                __persisted: true,
+              },
+            } as any)
+          } catch (error) {
+            console.error('Failed to add block feature to draw:', error)
+          }
+        } else {
+          try {
+            draw.setFeatureProperty(blockId, '__persisted', true)
+            if (feature?.properties?.fillColor) {
+              draw.setFeatureProperty(blockId, 'fillColor', feature.properties.fillColor)
+            }
+          } catch (error) {
+            // ignore property update errors
+          }
+        }
+      })
+    }
+
+    persistedFeatures.forEach((feature: any) => {
+      const featureId = String(feature.id)
+      if (!incomingIds.has(featureId)) {
+        try {
+          draw.delete(featureId)
+        } catch (error) {
+          console.error('Failed to remove stale block feature from draw:', error)
+        }
+      }
+    })
+  }, [draw, blocks, getBlockIdentifier])
+
   // Handle blocks data updates - only when blocks change or source doesn't exist
   useEffect(() => {
     if (!map || !map.loaded()) return
@@ -177,32 +242,11 @@ function MapContainer({
         })
 
         console.log('✅ Added block layers with source')
-
-        // Add click handlers
-        if (onBlockClick) {
-          map.on('click', layerId, (e: any) => {
-            const feature = e.features[0]
-            if (feature) {
-              const blockId = feature.id || feature.properties?.id
-              if (blockId) {
-                onBlockClick(blockId as string)
-              }
-            }
-          })
-
-          map.on('mouseenter', layerId, () => {
-            map.getCanvas().style.cursor = 'pointer'
-          })
-
-          map.on('mouseleave', layerId, () => {
-            map.getCanvas().style.cursor = ''
-          })
-        }
       } catch (error) {
         console.error('Error adding layers with source:', error)
       }
     }
-  }, [map, blocks, onBlockClick])
+  }, [map, blocks])
 
 
   // Debounced values for style updates to prevent flicker
@@ -236,6 +280,49 @@ function MapContainer({
     }
   }, [map, debouncedColor, debouncedOpacity])
 
+  // Align Mapbox Draw styling with our custom block visualization
+  useEffect(() => {
+    if (!map) return
+
+    const transparentFillLayers = [
+      'gl-draw-polygon-fill-inactive.cold',
+      'gl-draw-polygon-fill-inactive.hot',
+      'gl-draw-polygon-fill-active',
+    ]
+    const strokeLayers = ['gl-draw-polygon-stroke-inactive', 'gl-draw-polygon-stroke-active']
+
+    const applyStyles = () => {
+      transparentFillLayers.forEach((layerId) => {
+        if (map.getLayer(layerId)) {
+          map.setPaintProperty(layerId, 'fill-opacity', 0)
+        }
+      })
+
+      if (map.getLayer('gl-draw-polygon-stroke-inactive')) {
+        map.setPaintProperty('gl-draw-polygon-stroke-inactive', 'line-opacity', 0)
+      }
+
+      if (map.getLayer('gl-draw-polygon-stroke-active')) {
+        map.setPaintProperty('gl-draw-polygon-stroke-active', 'line-color', debouncedColor)
+        map.setPaintProperty('gl-draw-polygon-stroke-active', 'line-width', 3)
+      }
+
+      if (map.getLayer('gl-draw-polygon-and-line-vertex-halo-active')) {
+        map.setPaintProperty('gl-draw-polygon-and-line-vertex-halo-active', 'circle-radius', 6)
+      }
+    }
+
+    if (map.loaded()) {
+      applyStyles()
+    } else {
+      map.once('idle', applyStyles)
+    }
+
+    return () => {
+      map.off('idle', applyStyles)
+    }
+  }, [map, debouncedColor])
+
   // Update selection highlight
   useEffect(() => {
     if (!map || !map.loaded()) return
@@ -256,6 +343,43 @@ function MapContainer({
       console.error('Error updating selection:', error)
     }
   }, [map, selectedBlockId])
+
+  // Sync pointer interactions with Mapbox Draw selection/editing
+  useEffect(() => {
+    if (!map || !draw) return
+
+    const layerId = 'blocks-layer'
+    if (!map.getLayer(layerId)) return
+
+    const handleMouseEnter = () => {
+      map.getCanvas().style.cursor = 'pointer'
+    }
+
+    const handleMouseLeave = () => {
+      map.getCanvas().style.cursor = ''
+    }
+
+    const handleClick = (e: any) => {
+      const feature = e?.features?.[0]
+      const blockId = getBlockIdentifier(feature)
+      if (!blockId) return
+      if (e?.originalEvent?.detail && e.originalEvent.detail > 1) {
+        return
+      }
+      e.preventDefault()
+      onBlockSelect?.(blockId, feature)
+    }
+
+    map.on('mouseenter', layerId, handleMouseEnter)
+    map.on('mouseleave', layerId, handleMouseLeave)
+    map.on('click', layerId, handleClick)
+
+    return () => {
+      map.off('mouseenter', layerId, handleMouseEnter)
+      map.off('mouseleave', layerId, handleMouseLeave)
+      map.off('click', layerId, handleClick)
+    }
+  }, [map, draw, onBlockSelect, getBlockIdentifier])
 
   // Handle label visibility
   useEffect(() => {
@@ -311,6 +435,7 @@ function MapContainer({
         trash: false,
       },
       defaultMode: 'simple_select',
+      userProperties: true,
     })
 
     map.addControl(newDraw as any, 'top-left')

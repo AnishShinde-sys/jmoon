@@ -17,7 +17,7 @@ interface BlockListProps {
 
 export default function BlockList({ farmId, onCreateClick, onBlockSelect }: BlockListProps) {
   const { blocks, blocksGeoJSON, loading, error, deleteBlock } = useBlocks(farmId)
-  const { addGeoJSONSource, addLayer, fitBounds } = useMap()
+  const { addGeoJSONSource, addLayer, setPaintProperty, fitBounds } = useMap()
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
 
@@ -28,24 +28,17 @@ export default function BlockList({ farmId, onCreateClick, onBlockSelect }: Bloc
     const sourceId = 'blocks-source'
     const layerId = 'blocks-layer'
 
-    // Add source and layer
     addGeoJSONSource(sourceId, blocksGeoJSON)
     addLayer({
       id: layerId,
       type: 'fill',
       source: sourceId,
       paint: {
-        'fill-color': [
-          'case',
-          ['==', ['get', 'id'], selectedBlockId || ''],
-          '#3b82f6', // Selected color (blue)
-          '#10b981', // Default color (green)
-        ],
+        'fill-color': '#10b981',
         'fill-opacity': 0.3,
       },
     })
 
-    // Add outline
     addLayer({
       id: `${layerId}-outline`,
       type: 'line',
@@ -56,9 +49,21 @@ export default function BlockList({ farmId, onCreateClick, onBlockSelect }: Bloc
       },
     })
 
-    // Fit map to blocks
     fitBounds(blocksGeoJSON)
-  }, [blocksGeoJSON, selectedBlockId, addGeoJSONSource, addLayer, fitBounds])
+  }, [blocksGeoJSON, addGeoJSONSource, addLayer, fitBounds])
+
+  useEffect(() => {
+    if (!blocksGeoJSON || !blocksGeoJSON.features || blocksGeoJSON.features.length === 0) return
+
+    const layerId = 'blocks-layer'
+
+    setPaintProperty(layerId, 'fill-color', [
+      'case',
+      ['==', ['get', 'id'], selectedBlockId ?? ''],
+      '#3b82f6',
+      '#10b981',
+    ])
+  }, [blocksGeoJSON, selectedBlockId, setPaintProperty])
 
   const handleBlockClick = (block: Block) => {
     setSelectedBlockId(block.id)

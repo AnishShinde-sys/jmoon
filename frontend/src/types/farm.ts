@@ -16,6 +16,11 @@ export interface Farm {
   description?: string
   ownerId?: string
   owner?: string
+  imageUrl?: string
+  previewImageUrl?: string
+  thumbnailUrl?: string
+  coverImageUrl?: string
+  locationName?: string
   geolocation?: {
     latitude: number
     longitude: number

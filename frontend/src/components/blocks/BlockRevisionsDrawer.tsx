@@ -7,6 +7,7 @@ import Drawer from '@/components/ui/Drawer'
 import { useUI } from '@/context/UIContext'
 import apiClient from '@/lib/apiClient'
 import { Block } from '@/types/block'
+import type { BlockEditorState } from './BlockEditorPanel'
 
 interface BlockRevision {
   id: string
@@ -25,9 +26,10 @@ const DRAWER_NAME = 'blockRevisions'
 
 interface BlockRevisionsDrawerProps {
   farmId: string
+  onOpenBlockEditor?: (state: BlockEditorState) => void
 }
 
-export default function BlockRevisionsDrawer({ farmId }: BlockRevisionsDrawerProps) {
+export default function BlockRevisionsDrawer({ farmId, onOpenBlockEditor }: BlockRevisionsDrawerProps) {
   const { drawers, closeDrawer, openDrawer, showAlert } = useUI()
   const [block, setBlock] = useState<Block | null>(null)
   const [revisions, setRevisions] = useState<BlockRevision[]>([])
@@ -84,7 +86,11 @@ export default function BlockRevisionsDrawer({ farmId }: BlockRevisionsDrawerPro
     if (blockId) {
       closeDrawer(DRAWER_NAME)
       setTimeout(() => {
-        openDrawer('blockDetails', blockId)
+        if (block) {
+          onOpenBlockEditor?.({ mode: 'edit', block: { ...block }, blockId })
+        } else {
+          onOpenBlockEditor?.({ mode: 'edit', blockId })
+        }
       }, 150)
     } else {
       closeDrawer(DRAWER_NAME)
@@ -121,6 +127,7 @@ export default function BlockRevisionsDrawer({ farmId }: BlockRevisionsDrawerPro
       setBlock(updatedBlock)
       showAlert('Block reverted successfully', 'success')
       await loadRevisions()
+      onOpenBlockEditor?.({ mode: 'edit', block: updatedBlock, blockId })
     } catch (error: any) {
       showAlert(error?.response?.data?.message || 'Failed to revert block', 'error')
     } finally {
