@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo, useEffect, ReactNode } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Farm } from '@/types/farm'
 import {
@@ -20,59 +20,53 @@ import apiClient from '@/lib/apiClient'
 import type { Dataset } from '@/types/dataset'
 import type { Collector } from '@/types/collector'
 import type { PluginDefinition } from '@/types/plugin'
-import { useUserProfile } from '@/context/UserProfileContext'
-import { formatArea } from '@/lib/utils'
 import { useUI } from '@/context/UIContext'
-import type { BlockField, CreateBlockInput, UpdateBlockInput } from '@/types/block'
-import BlockEditorPanel, { BlockEditorState } from '@/components/blocks/BlockEditorPanel'
+import type { Block, BlockFieldDefinition } from '@/types/block'
+import BlockList from '@/components/blocks/BlockList'
 
 interface FarmSidebarProps {
   farm: Farm
-  blocks: any[]
+  blocksGeoJson: GeoJSON.Feature[]
+  blockEntities: Block[]
+  blockFields?: BlockFieldDefinition[]
+  measurementSystem: 'Metric' | 'Imperial'
   onClose: () => void
   onCreateBlock: () => void
   onShowSettings: () => void
   onShowCollaborators: () => void
-  onBlockClick?: (blockId: string) => void
   onVizUpdate?: (settings: Farm['vizSettings']) => void
   isOpen: boolean
-  onOpenBlockDrawer?: () => void
-  selectedBlockId?: string | null
-  blockEditorState: BlockEditorState
-  onBlockEditorStateChange: (state: BlockEditorState) => void
-  createBlock: (input: CreateBlockInput) => Promise<any>
-  updateBlock: (blockId: string, input: UpdateBlockInput & { revisionMessage?: string }) => Promise<any>
-  deleteBlock: (blockId: string) => Promise<void>
-  refetchBlocks?: () => Promise<void>
+  onOpenBlockDetails: (blockId: string) => void
+  onEditBlock: (blockId: string) => void
+  onDeleteBlocks: (blockIds: string[]) => Promise<void>
+  onBulkUpdate: (field: BlockFieldDefinition, value: unknown, blockIds: string[]) => Promise<void>
+  loadingBlocks?: boolean
 }
 
 export default function FarmSidebar({
   farm,
-  blocks,
+  blocksGeoJson,
+  blockEntities,
+  blockFields = [],
+  measurementSystem,
   onClose,
   onCreateBlock,
   onShowSettings,
   onShowCollaborators,
-  onBlockClick,
   onVizUpdate,
   isOpen,
-  onOpenBlockDrawer,
-  selectedBlockId,
-  blockEditorState,
-  onBlockEditorStateChange,
-  createBlock,
-  updateBlock,
-  deleteBlock,
-  refetchBlocks,
+  onOpenBlockDetails,
+  onEditBlock,
+  onDeleteBlocks,
+  onBulkUpdate,
+  loadingBlocks,
 }: FarmSidebarProps) {
   const router = useRouter()
-  const { profile } = useUserProfile()
   const [activeTab, setActiveTab] = useState<'viz' | 'list' | 'cloud' | 'datasets' | 'collectors' | 'plugins'>(
     'list'
   )
 
   const farmPluginIds = useMemo(() => farm.plugins ?? [], [farm.plugins])
-  const measurementSystem = profile?.measurementSystem ?? 'Metric'
 
   const handleBackToFarms = () => {
     router.push('/dashboard')
@@ -89,7 +83,7 @@ export default function FarmSidebar({
   const handleDownloadGeoJSON = () => {
     const geoJsonData = {
       type: 'FeatureCollection',
-      features: blocks,
+      features: blocksGeoJson,
     }
     const dataStr = JSON.stringify(geoJsonData, null, 2)
     const dataBlob = new Blob([dataStr], { type: 'application/json' })
@@ -106,7 +100,7 @@ export default function FarmSidebar({
     
     // Get all unique headers from all blocks
     const allHeaders = new Set<string>()
-    blocks.forEach((block: any) => {
+    blocksGeoJson.forEach((block: any) => {
       if (block.properties) {
         Object.keys(block.properties).forEach(key => allHeaders.add(key))
       }
@@ -118,7 +112,7 @@ export default function FarmSidebar({
     csvRows.push(headers.join(','))
     
     // Add data rows
-    blocks.forEach((block: any) => {
+    blocksGeoJson.forEach((block: any) => {
       const values = headers.map(header => {
         const value = block.properties?.[header] || ''
         // Escape commas and quotes
@@ -247,15 +241,6 @@ export default function FarmSidebar({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 011-1h1a2 2 0 100-4H7a1 1 0 01-1-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
             </svg>
           </button>
-          <button
-            onClick={onOpenBlockDrawer}
-            className="px-4 flex items-center justify-center text-gray-600 transition-colors hover:text-gray-900"
-            title="Open Block Editor"
-            aria-label="Open Block Editor"
-            type="button"
-          >
-            <PencilSquareIcon className="w-5 h-5" />
-          </button>
         </div>
 
           {/* Content */}
@@ -264,70 +249,19 @@ export default function FarmSidebar({
             <FarmVizSettings farm={farm} onUpdate={handleVizUpdate} />
           )}
           {activeTab === 'list' && (
-            <div className="space-y-4 py-4">
-              <button
-                type="button"
-                onClick={onOpenBlockDrawer}
-                className="btn btn-primary w-full flex items-center justify-center gap-2"
-              >
-                <PencilSquareIcon className="h-4 w-4" />
-                Edit Blocks
-              </button>
-
-              <BlockEditorPanel
-                farmId={farm.id}
-                state={blockEditorState}
-                createBlock={createBlock}
-                updateBlock={updateBlock}
-                deleteBlock={deleteBlock}
-                refetchBlocks={refetchBlocks}
-                onRequestClose={() => onBlockEditorStateChange({ mode: 'hidden' })}
+            <div className="py-4">
+              <BlockList
+                blocks={blocksGeoJson}
+                blockEntities={blockEntities}
+                blockFields={blockFields}
+                measurementSystem={measurementSystem}
+                onCreateBlocks={handleCreateBlockClick}
+                onOpenBlockDetails={onOpenBlockDetails}
+                onEditBlock={onEditBlock}
+                onDeleteBlocks={onDeleteBlocks}
+                onBulkUpdate={onBulkUpdate}
+                loading={loadingBlocks}
               />
-
-              {blocks.length === 0 ? (
-                <p className="text-sm text-gray-500">No blocks yet. Use "Create Blocks" to add your first block.</p>
-              ) : (
-                <div className="max-h-[420px] space-y-2 overflow-y-auto">
-                  {blocks.map((block: any) => {
-                    const blockId = block.id || block.properties?.id
-                    const isSelected = selectedBlockId && String(blockId) === String(selectedBlockId)
-                    return (
-                      <div
-                        key={blockId}
-                        onClick={() => onBlockClick?.(blockId)}
-                        className={`cursor-pointer rounded-md border p-3 transition-all ${
-                          isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
-                        }`}
-                        title={block.properties?.description || block.properties?.name || 'Block details'}
-                      >
-                        <p className="mb-2 text-sm font-medium">
-                          {block.properties?.name || 'Unnamed Block'}
-                        </p>
-                        <div className="space-y-1 text-xs">
-                          {block.properties?.area != null && (
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Area:</span>
-                              <span className="text-gray-900">{formatArea(block.properties.area, measurementSystem)}</span>
-                            </div>
-                          )}
-                          {block.properties?.variety && (
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Variety:</span>
-                              <span className="text-gray-900">{block.properties.variety}</span>
-                            </div>
-                          )}
-                          {block.properties?.plantingYear && (
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Year:</span>
-                              <span className="text-gray-900">{block.properties.plantingYear}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
             </div>
           )}
           {activeTab === 'datasets' && farm.id && <DatasetsTabContent farmId={farm.id} />}

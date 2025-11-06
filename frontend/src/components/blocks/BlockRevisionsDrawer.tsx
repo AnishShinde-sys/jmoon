@@ -7,8 +7,6 @@ import Drawer from '@/components/ui/Drawer'
 import { useUI } from '@/context/UIContext'
 import apiClient from '@/lib/apiClient'
 import { Block } from '@/types/block'
-import type { BlockEditorState } from './BlockEditorPanel'
-
 interface BlockRevision {
   id: string
   updatedAt?: string
@@ -26,7 +24,7 @@ const DRAWER_NAME = 'blockRevisions'
 
 interface BlockRevisionsDrawerProps {
   farmId: string
-  onOpenBlockEditor?: (state: BlockEditorState) => void
+  onOpenBlockEditor?: (state: { mode: 'create' | 'edit'; block?: Block | null; blockId?: string | number }) => void
 }
 
 export default function BlockRevisionsDrawer({ farmId, onOpenBlockEditor }: BlockRevisionsDrawerProps) {

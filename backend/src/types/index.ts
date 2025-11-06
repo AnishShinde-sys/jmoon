@@ -79,6 +79,7 @@ export interface Block {
   id: string
   farmId: string
   name: string
+  description?: string
   variety?: string
   plantingYear?: number
   rowSpacing?: number // meters
@@ -106,12 +107,25 @@ export interface BlockRevision {
 
 export interface CreateBlockInput {
   name: string
+  description?: string
   variety?: string
   plantingYear?: number
   rowSpacing?: number
   vineSpacing?: number
   geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon
   customFields?: BlockField[]
+}
+
+export interface UpdateBlockInput {
+  name?: string
+  description?: string
+  variety?: string
+  plantingYear?: number
+  rowSpacing?: number
+  vineSpacing?: number
+  geometry?: GeoJSON.Polygon | GeoJSON.MultiPolygon
+  customFields?: BlockField[]
+  revisionMessage?: string
 }
 
 // ============================================================================

@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation'
 import { AdjustmentsHorizontalIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
 import bbox from '@turf/bbox'
 
-import type { BlockEditorState } from '@/components/blocks/BlockEditorPanel'
+import BlockDetailsDrawer from '@/components/blocks/BlockDetailsDrawer'
+import CreateBlockDrawer from '@/components/blocks/CreateBlockDrawer'
 import BlockRevisionsDrawer from '@/components/blocks/BlockRevisionsDrawer'
 import BlockRevisionPreviewDrawer from '@/components/blocks/BlockRevisionPreviewDrawer'
 import DatasetDrawer from '@/components/datasets/DatasetDrawer'
@@ -29,9 +30,11 @@ import MapLayersDrawer from '@/components/map/MapLayersDrawer'
 import MapLegend from '@/components/map/MapLegend'
 import { useUI } from '@/context/UIContext'
 import { useMapContext } from '@/context/MapContext'
+import { useUserProfile } from '@/context/UserProfileContext'
 import { useBlocks } from '@/hooks/useBlocks'
 import apiClient from '@/lib/apiClient'
 import { Farm } from '@/types/farm'
+import { Block, BlockFieldDefinition } from '@/types/block'
 
 interface FarmPageClientProps {
   farmId: string
@@ -39,11 +42,19 @@ interface FarmPageClientProps {
   layerId?: string
 }
 
+type LegacyBlockEditorState = {
+  mode: 'hidden' | 'create' | 'edit'
+  block?: Block | null
+  blockId?: string | number
+}
+
 export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientProps) {
   const router = useRouter()
   const { showAlert, openDrawer, closeDrawer, drawers } = useUI()
   const { map, draw } = useMapContext()
+  const { profile } = useUserProfile()
   const {
+    blocks,
     blocksGeoJSON: blocksJSONFromHook,
     refetch: refetchBlocks,
     createBlock,
@@ -57,61 +68,13 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
   const [isDrawing, setIsDrawing] = useState(false)
   const [hasDrawing, setHasDrawing] = useState(false)
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
-  const [selectedBlockData, setSelectedBlockData] = useState<any | null>(null)
-  const [blockEditorState, setBlockEditorState] = useState<BlockEditorState>({ mode: 'hidden' })
-
-  const normalizeCustomFields = useCallback((fields: any[] | undefined | null) => {
-    if (!Array.isArray(fields)) return []
-    return fields.map((field: any, index: number) => ({
-      ...field,
-      key: field?.key ?? `${field?.label ?? 'field'}_${index}`,
-    }))
-  }, [])
-
-  const normalizeBlockPayload = useCallback(
-    (blockPayload: any | undefined | null) => {
-      if (!blockPayload) return null
-
-      const customFields = normalizeCustomFields(blockPayload.customFields)
-      return {
-        ...blockPayload,
-        customFields,
-      }
-    },
-    [normalizeCustomFields]
-  )
-
-  const openBlockEditor = useCallback(
-    (state: BlockEditorState) => {
-      setBlockEditorState(state)
-
-      if (state.mode === 'edit') {
-        if (state.block) {
-          const normalized = normalizeBlockPayload(state.block)
-          if (normalized) {
-            setSelectedBlockId(String(normalized.id))
-            setSelectedBlockData(normalized)
-          }
-        } else if (state.blockId) {
-          setSelectedBlockId(String(state.blockId))
-          setSelectedBlockData(null)
-        }
-      }
-
-      if (state.mode === 'create') {
-        setSelectedBlockId(null)
-        setSelectedBlockData(null)
-      }
-    },
-    [normalizeBlockPayload]
-  )
-
-  const getBlockFeatureId = useCallback((feature: any): string | null => {
-    if (!feature) return null
-    const rawId = feature.id ?? feature.properties?.id ?? feature.properties?.blockId
-    if (rawId === undefined || rawId === null) return null
-    return String(rawId)
-  }, [])
+  const [isCreateDrawerOpen, setCreateDrawerOpen] = useState(false)
+  const [createDrawerMode, setCreateDrawerMode] = useState<'create' | 'edit'>('create')
+  const [editorBlock, setEditorBlock] = useState<Block | null>(null)
+  const [editorGeometry, setEditorGeometry] = useState<GeoJSON.Geometry | null>(null)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [detailsBlock, setDetailsBlock] = useState<Block | null>(null)
+  const [detailsFeature, setDetailsFeature] = useState<GeoJSON.Feature | null>(null)
 
   // Fetch farm details
   useEffect(() => {
@@ -150,79 +113,73 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
     }
   }, [blocksJSONFromHook])
 
-  // Listen for drawing events
-  useEffect(() => {
-    if (!map || !draw) return
+  const getFieldKey = useCallback((field: BlockFieldDefinition) => field.machineName || field.label, [])
 
-    const handleDrawCreate = () => {
-      const features = draw.getAll()
-      if (features.features.length > 0) {
-        features.features.forEach((feature: any) => {
-          if (!feature?.properties?.__persisted && feature?.id) {
-            try {
-              draw.setFeatureProperty(feature.id, '__draft', true)
-            } catch (error) {
-              console.warn('Failed to tag draft feature', error)
-            }
-          }
+  const farmDefinedFields = useMemo<BlockFieldDefinition[]>(() => {
+    const source = (farm as any)?.blockFields
+    if (!Array.isArray(source)) return []
+    return source
+      .map((field: any) => {
+        const machineName = field.machine_name || field.machineName || field.label
+        if (!machineName) return null
+        return {
+          label: field.label || machineName,
+          machineName,
+          type: field.type || 'Text',
+          group: field.group,
+          options: field.options || [],
+          required: Boolean(field.required),
+          hidden: Boolean(field.hidden),
+          min: field.min ?? undefined,
+          max: field.max ?? undefined,
+          step: field.step ?? undefined,
+          suffix: field.suffix ?? undefined,
+          includeTime: field.includeTime ?? undefined,
+        } as BlockFieldDefinition
+      })
+      .filter((field): field is BlockFieldDefinition => Boolean(field))
+  }, [farm])
+
+  const derivedBlockFields = useMemo<BlockFieldDefinition[]>(() => {
+    const fieldMap = new Map<string, BlockFieldDefinition>()
+
+    farmDefinedFields.forEach((field) => {
+      fieldMap.set(getFieldKey(field), field)
+    })
+
+    if (blocksJSONFromHook?.features?.length) {
+      const restricted = new Set([
+        'id',
+        'name',
+        'description',
+        'area',
+        'variety',
+        'plantingYear',
+        'rowSpacing',
+        'vineSpacing',
+        'createdAt',
+        'updatedAt',
+        'farmId',
+      ])
+      blocksJSONFromHook.features.forEach((feature: any) => {
+        const props = (feature.properties || {}) as Record<string, unknown>
+        Object.entries(props).forEach(([key, val]) => {
+          if (restricted.has(key)) return
+          if (fieldMap.has(key)) return
+          fieldMap.set(key, {
+            label: key,
+            machineName: key,
+            type: typeof val === 'number' ? 'Number' : 'Text',
+          })
         })
-        setHasDrawing(true)
-        setIsDrawing(false)
-        openBlockEditor({ mode: 'create' })
-      }
-    }
-
-    const handleDrawUpdate = (event: any) => {
-      const updatedFeatures = (event?.features || []) as any[]
-      if (!updatedFeatures.length) return
-
-      setBlocksGeoJSON((prev) => {
-        if (!Array.isArray(prev) || prev.length === 0) return prev
-
-        let didChange = false
-        const updatesById = new Map<string, any>()
-        updatedFeatures.forEach((feature) => {
-          const featureId = getBlockFeatureId(feature)
-          if (featureId) {
-            updatesById.set(featureId, feature)
-          }
-        })
-
-        if (updatesById.size === 0) return prev
-
-        const next = prev.map((feature: any) => {
-          const featureId = getBlockFeatureId(feature)
-          if (!featureId) return feature
-          const updated = updatesById.get(featureId)
-          if (updated && updated.geometry) {
-            didChange = true
-            return {
-              ...feature,
-              geometry: updated.geometry,
-            }
-          }
-          return feature
-        })
-
-        return didChange ? next : prev
       })
     }
 
-    const handleDrawDelete = () => {
-      const features = draw.getAll()
-      setHasDrawing(features.features.length > 0)
-    }
+    return Array.from(fieldMap.values())
+  }, [blocksJSONFromHook, farmDefinedFields, getFieldKey])
 
-    map.on('draw.create', handleDrawCreate)
-    map.on('draw.update', handleDrawUpdate)
-    map.on('draw.delete', handleDrawDelete)
+  const measurementSystem = profile?.measurementSystem === 'Imperial' ? 'Imperial' : 'Metric'
 
-    return () => {
-      map.off('draw.create', handleDrawCreate)
-      map.off('draw.update', handleDrawUpdate)
-      map.off('draw.delete', handleDrawDelete)
-    }
-  }, [map, draw, getBlockFeatureId, openBlockEditor])
 
   useEffect(() => {
     const handleLaunchCollector = (event: Event) => {
@@ -300,148 +257,223 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
     }
   }, [layerType, layerId, farmId, openDrawer, showAlert])
 
-  const startDrawing = () => {
+  useEffect(() => {
+    if (!map || !draw) return
+
+    const updateDraftState = () => {
+      try {
+        const drafts = draw
+          .getAll()
+          .features.filter((feature: any) => !feature?.properties?.__persisted)
+        setHasDrawing(drafts.length > 0)
+      } catch (error) {
+        console.warn('Failed to inspect draw features:', error)
+      }
+    }
+
+    map.on('draw.create', updateDraftState)
+    map.on('draw.delete', updateDraftState)
+    map.on('draw.update', updateDraftState)
+
+    updateDraftState()
+
+    return () => {
+      map.off('draw.create', updateDraftState)
+      map.off('draw.delete', updateDraftState)
+      map.off('draw.update', updateDraftState)
+    }
+  }, [map, draw])
+
+  const startDrawing = useCallback(() => {
     if (!draw) return
     setIsDrawing(true)
     draw.changeMode('draw_polygon')
     showAlert('Click to start drawing a polygon. Double-click to finish.', 'info')
-  }
+  }, [draw, showAlert])
 
-  const clearDrawing = () => {
+  const clearDrawing = useCallback(() => {
     if (!draw) return
 
-    const draftFeatureIds = draw
-      .getAll()
-      .features.filter((feature: any) => !feature?.properties?.__persisted)
-      .map((feature: any) => feature.id)
-      .filter((id): id is string => typeof id === 'string')
+    try {
+      const draftFeatureIds = draw
+        .getAll()
+        .features.filter((feature: any) => !feature?.properties?.__persisted)
+        .map((feature: any) => feature.id)
+        .filter((id): id is string => typeof id === 'string')
 
-    if (draftFeatureIds.length) {
-      draw.delete(draftFeatureIds)
+      if (draftFeatureIds.length) {
+        draw.delete(draftFeatureIds)
+      }
+      draw.changeMode('simple_select')
+    } catch (error) {
+      console.warn('Failed to clear draft drawings:', error)
     }
 
     setIsDrawing(false)
     setHasDrawing(false)
-  }
+  }, [draw])
 
-  const finishDrawing = () => {
+  const finishDrawing = useCallback(() => {
     if (!draw) return
     setIsDrawing(false)
     draw.changeMode('simple_select')
-  }
+  }, [draw])
 
-  const handleBlockClick = (blockId: string, feature?: any) => {
-    setSelectedBlockId(blockId)
-    closeDrawer('farmDetails')
-
-    let blockFeature = feature
-
-    if (!blockFeature && blocksGeoJSON.length > 0) {
-      blockFeature = blocksGeoJSON.find((b: any) => {
-        const id = b.id || b.properties?.id
-        return id === blockId
+  const findBlockFeature = useCallback(
+    (blockId: string) => {
+      return blocksGeoJSON.find((feature: any) => {
+        const id = feature.id || feature.properties?.id || feature.properties?.blockId
+        return String(id) === String(blockId)
       })
-    }
+    },
+    [blocksGeoJSON]
+  )
 
-    if (map && blockFeature?.geometry) {
-      try {
-        const bounds = bbox(blockFeature as any)
-        map.fitBounds(bounds as [number, number, number, number], { padding: 100, duration: 1000 })
-      } catch (error) {
-        console.error('Error flying to block:', error)
-      }
-    }
-
-    const blockPayload = blockFeature
-      ? {
-          id: blockId,
-          ...(blockFeature.properties || {}),
-          geometry: blockFeature.geometry,
+  const focusBlockOnMap = useCallback(
+    (blockId: string) => {
+      const feature = findBlockFeature(blockId)
+      if (map && feature?.geometry) {
+        try {
+          const bounds = bbox(feature as any)
+          map.fitBounds(bounds as [number, number, number, number], { padding: 100, duration: 800 })
+        } catch (error) {
+          console.error('Error flying to block:', error)
         }
-      : undefined
+      }
+    },
+    [findBlockFeature, map]
+  )
 
-    if (blockPayload) {
-      const normalized = normalizeBlockPayload(blockPayload)
-      openBlockEditor({ mode: 'edit', block: normalized || undefined, blockId })
-    } else {
-      openBlockEditor({ mode: 'edit', blockId })
-    }
-  }
+  const handleCreateBlock = useCallback(() => {
+    setCreateDrawerMode('create')
+    setEditorBlock(null)
+    setEditorGeometry(null)
+    setCreateDrawerOpen(true)
+    setDetailsOpen(false)
+    setSelectedBlockId(null)
+    startDrawing()
+  }, [startDrawing])
 
-  const handleBlockSelectOnMap = (blockId: string, feature?: any) => {
-    handleBlockClick(blockId, feature)
-  }
-
-  const handleOpenBlockDrawer = () => {
-    if (selectedBlockData) {
-      openBlockEditor({ mode: 'edit', block: selectedBlockData, blockId: selectedBlockData.id })
-      return
-    }
-
-    if (blocksGeoJSON.length > 0) {
-      const firstFeature = blocksGeoJSON[0]
-      const firstId = firstFeature?.id || firstFeature?.properties?.id
-      if (firstId) {
-        handleBlockClick(String(firstId), firstFeature)
+  const handleEditBlock = useCallback(
+    (blockId: string) => {
+      const blockEntity = blocks.find((item) => item.id === blockId)
+      if (!blockEntity) {
+        showAlert('Block not found.', 'error')
         return
       }
-    }
+      const feature = findBlockFeature(blockId)
+      setCreateDrawerMode('edit')
+      setEditorBlock(blockEntity)
+      setEditorGeometry(feature?.geometry || null)
+      setCreateDrawerOpen(true)
+      setSelectedBlockId(blockId)
+      focusBlockOnMap(blockId)
+    },
+    [blocks, findBlockFeature, focusBlockOnMap, showAlert]
+  )
 
-    showAlert('Select or draw a block to edit.', 'info')
-  }
-  useEffect(() => {
-    if (!selectedBlockId) {
-      setSelectedBlockData(null)
-      return
-    }
-
-    const blockFeature = blocksGeoJSON.find((feature: any) => {
-      const id = feature.id || feature.properties?.id
-      return String(id) === String(selectedBlockId)
-    })
-
-    if (blockFeature) {
-      const payload = {
-        id: selectedBlockId,
-        ...(blockFeature.properties || {}),
-        geometry: blockFeature.geometry,
+  const handleOpenBlockDetails = useCallback(
+    (blockId: string) => {
+      const blockEntity = blocks.find((item) => item.id === blockId)
+      if (!blockEntity) {
+        showAlert('Block not found.', 'error')
+        return
       }
+      const feature = findBlockFeature(blockId) || null
+      setDetailsBlock(blockEntity)
+      setDetailsFeature(feature)
+      setDetailsOpen(true)
+      setSelectedBlockId(blockId)
+      focusBlockOnMap(blockId)
+    },
+    [blocks, findBlockFeature, focusBlockOnMap, showAlert]
+  )
 
-      const customFields = Array.isArray(payload.customFields)
-        ? payload.customFields.map((field: any, index: number) => ({
-            ...field,
-            key: field?.key ?? `${field?.label ?? 'field'}_${index}`,
-          }))
-        : []
-
-      const normalized = {
-        ...payload,
-        customFields,
+  const handleBlockSelectOnMap = useCallback(
+    (blockId: string, feature?: any) => {
+      if (feature) {
+        setDetailsFeature(feature)
       }
+      handleOpenBlockDetails(blockId)
+    },
+    [handleOpenBlockDetails]
+  )
 
-      setSelectedBlockData(normalized)
-
-      if (
-        blockEditorState.mode === 'edit' &&
-        (blockEditorState.blockId || blockEditorState.block?.id) === selectedBlockId
-      ) {
-        openBlockEditor({ mode: 'edit', block: normalized, blockId: selectedBlockId })
+  const handleDeleteBlocks = useCallback(
+    async (blockIds: string[]) => {
+      if (!blockIds.length) return
+      try {
+        for (const id of blockIds) {
+          await deleteBlock(id)
+        }
+        await refetchBlocks()
+        showAlert(`Deleted ${blockIds.length} block${blockIds.length === 1 ? '' : 's'}.`, 'success')
+        if (selectedBlockId && blockIds.includes(selectedBlockId)) {
+          setSelectedBlockId(null)
+          setDetailsOpen(false)
+        }
+      } catch (error: any) {
+        console.error('Bulk delete failed:', error)
+        showAlert(error?.response?.data?.message || 'Failed to delete selected blocks.', 'error')
       }
-    } else {
-      setSelectedBlockData(null)
-      if (
-        blockEditorState.mode === 'edit' &&
-        (blockEditorState.blockId || blockEditorState.block?.id) === selectedBlockId
-      ) {
-        openBlockEditor({ mode: 'hidden' })
+    },
+    [deleteBlock, refetchBlocks, selectedBlockId, showAlert]
+  )
+
+  const handleBulkUpdate = useCallback(
+    async (field: BlockFieldDefinition, value: unknown, blockIds: string[]) => {
+      if (!blockIds.length) return
+      try {
+        let normalizedValue: unknown = value
+        if ((field.type === 'Number' || field.type === 'CV Number') && typeof value === 'string') {
+          const parsed = Number(value)
+          if (!Number.isNaN(parsed)) {
+            normalizedValue = parsed
+          }
+        } else if (field.type === 'Boolean' && typeof value === 'string') {
+          normalizedValue = value === 'true'
+        }
+        if (field.type === 'Date and Time') {
+          if (value instanceof Date) {
+            normalizedValue = value.toISOString()
+          } else if (typeof value === 'string') {
+            const asDate = new Date(value)
+            if (!Number.isNaN(asDate.getTime())) {
+              normalizedValue = asDate.toISOString()
+            }
+          }
+        }
+
+        for (const id of blockIds) {
+          const payload: any = {
+            revisionMessage: `Bulk update: ${field.label}`,
+          }
+          payload[field.machineName] = normalizedValue
+          await updateBlock(id, payload)
+        }
+        await refetchBlocks()
+        showAlert(`Updated ${blockIds.length} block${blockIds.length === 1 ? '' : 's'}.`, 'success')
+      } catch (error: any) {
+        console.error('Bulk update failed:', error)
+        showAlert(error?.response?.data?.message || 'Failed to apply bulk update.', 'error')
       }
-    }
-  }, [blocksGeoJSON, selectedBlockId, blockEditorState, openBlockEditor])
+    },
+    [refetchBlocks, showAlert, updateBlock]
+  )
 
-
-  const handleCreateBlock = () => {
-    startDrawing()
-  }
+  const handleLegacyOpenBlockEditor = useCallback(
+    (state: LegacyBlockEditorState) => {
+      if (state.mode === 'edit') {
+        const id = state.block?.id ?? (state.blockId != null ? String(state.blockId) : null)
+        if (id) {
+          handleEditBlock(String(id))
+        }
+      } else if (state.mode === 'create') {
+        handleCreateBlock()
+      }
+    },
+    [handleCreateBlock, handleEditBlock]
+  )
 
   const handleShowSettings = () => {
     if (!farm) return
@@ -486,7 +518,34 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
 
   return (
     <div className="h-screen flex relative overflow-hidden">
-      <BlockRevisionsDrawer farmId={farmId} onOpenBlockEditor={openBlockEditor} />
+      <BlockDetailsDrawer
+        isOpen={detailsOpen}
+        block={detailsBlock}
+        blockFeature={detailsFeature}
+        blockFields={derivedBlockFields}
+        measurementSystem={measurementSystem}
+        onClose={() => setDetailsOpen(false)}
+        onEdit={(block) => handleEditBlock(block.id)}
+        onShowRevisions={(block) => openDrawer('blockRevisions', block.id)}
+      />
+
+      <CreateBlockDrawer
+        isOpen={isCreateDrawerOpen}
+        mode={createDrawerMode}
+        block={editorBlock}
+        blockGeometry={editorGeometry}
+        blockFields={farmDefinedFields}
+        onClose={() => {
+          setCreateDrawerOpen(false)
+          clearDrawing()
+        }}
+        onCreate={createBlock}
+        onUpdate={updateBlock}
+        onDelete={deleteBlock}
+        onRefetch={refetchBlocks}
+      />
+
+      <BlockRevisionsDrawer farmId={farmId} onOpenBlockEditor={handleLegacyOpenBlockEditor} />
       <BlockRevisionPreviewDrawer />
       <DatasetDrawer farmId={farmId} />
       <DatasetDetailsDrawer />
@@ -521,22 +580,21 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
 
       <FarmSidebar
         farm={farm}
-        blocks={blocksGeoJSON}
+        blocksGeoJson={blocksGeoJSON}
+        blockEntities={blocks}
+        blockFields={derivedBlockFields}
+        measurementSystem={measurementSystem}
         onClose={() => setSidebarOpen(false)}
         onCreateBlock={handleCreateBlock}
         onShowSettings={handleShowSettings}
         onShowCollaborators={handleShowCollaborators}
-        onBlockClick={handleBlockClick}
         onVizUpdate={handleVizUpdate}
         isOpen={sidebarOpen}
-        onOpenBlockDrawer={handleOpenBlockDrawer}
-        selectedBlockId={selectedBlockId}
-        blockEditorState={blockEditorState}
-        onBlockEditorStateChange={openBlockEditor}
-        createBlock={createBlock}
-        updateBlock={updateBlock}
-        deleteBlock={deleteBlock}
-        refetchBlocks={refetchBlocks}
+        onOpenBlockDetails={handleOpenBlockDetails}
+        onEditBlock={handleEditBlock}
+        onDeleteBlocks={handleDeleteBlocks}
+        onBulkUpdate={handleBulkUpdate}
+        loadingBlocks={!blocksJSONFromHook}
       />
 
       <div className={`absolute inset-0 transition-all duration-300 ${sidebarOpen ? 'pl-0' : 'pl-0'}`}>

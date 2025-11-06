@@ -5,10 +5,37 @@ export interface BlockField {
   dataType: 'string' | 'number' | 'boolean' | 'date'
 }
 
+export type BlockFieldType =
+  | 'Text'
+  | 'Number'
+  | 'Select'
+  | 'Date and Time'
+  | 'Image'
+  | 'Formatted Text'
+  | 'Boolean'
+  | 'CV Number'
+  | 'Computer Vision'
+
+export interface BlockFieldDefinition {
+  label: string
+  machineName: string
+  type: BlockFieldType
+  group?: string
+  options?: string[]
+  required?: boolean
+  hidden?: boolean
+  min?: number
+  max?: number
+  step?: number
+  suffix?: string
+  includeTime?: boolean
+}
+
 export interface Block {
   id: string
   farmId: string
   name: string
+  description?: string
   variety?: string
   plantingYear?: number
   rowSpacing?: number
@@ -25,6 +52,7 @@ export interface Block {
 
 export interface CreateBlockInput {
   name: string
+  description?: string
   variety?: string
   plantingYear?: number
   rowSpacing?: number
@@ -35,6 +63,7 @@ export interface CreateBlockInput {
 
 export interface UpdateBlockInput {
   name?: string
+  description?: string
   variety?: string
   plantingYear?: number
   rowSpacing?: number

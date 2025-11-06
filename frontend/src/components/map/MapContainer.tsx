@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState, memo } from 'react'
 import mapboxgl from 'mapbox-gl'
 import MapboxDraw from '@mapbox/mapbox-gl-draw'
+import * as turf from '@turf/turf'
 import { useMapContext } from '@/context/MapContext'
+
+const BLOCK_SOURCE_ID = 'blocks'
+const BLOCK_LAYER_ID = 'blocks-layer'
+const BLOCK_OUTLINE_LAYER_ID = `${BLOCK_LAYER_ID}-outline`
+const BLOCK_LABEL_SOURCE_ID = 'block-labels'
+const BLOCK_LABEL_LAYER_ID = `${BLOCK_LAYER_ID}-labels`
 
 interface MapContainerProps {
   style?: string
@@ -14,6 +21,7 @@ interface MapContainerProps {
   enableDrawing?: boolean
   blocks?: any[]
   onBlockSelect?: (blockId: string, feature: any) => void
+  onBlockDoubleClick?: (blockId: string, feature: any) => void
   children?: React.ReactNode
   vizSettings?: {
     colorOpacity: number
@@ -34,6 +42,7 @@ function MapContainer({
   enableDrawing = false,
   blocks = [],
   onBlockSelect,
+  onBlockDoubleClick,
   children,
   vizSettings,
   selectedBlockId = null,
@@ -48,6 +57,38 @@ function MapContainer({
     if (rawId === undefined || rawId === null) return null
     return String(rawId)
   }, [])
+
+  const buildLabelFeatures = useCallback(
+    (features: any[]): any[] => {
+      if (!Array.isArray(features)) return []
+
+      const labels: any[] = []
+      features.forEach((feature) => {
+        const blockId = getBlockIdentifier(feature)
+        if (!blockId || !feature?.geometry) return
+
+        try {
+          const centroidFeature = turf.centroid(feature as any)
+          if (!centroidFeature?.geometry) return
+
+          labels.push({
+            type: 'Feature',
+            id: `${blockId}-label`,
+            geometry: centroidFeature.geometry,
+            properties: {
+              ...(feature.properties || {}),
+              blockId,
+            },
+          })
+        } catch (error) {
+          // Ignore features that fail centroid calculation
+        }
+      })
+
+      return labels
+    },
+    [getBlockIdentifier]
+  )
 
   if (!mapboxgl.accessToken && process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN) {
     mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN
@@ -124,12 +165,11 @@ function MapContainer({
 
   // Keep persisted farm blocks mirrored inside Mapbox Draw so they can be edited
   useEffect(() => {
-    if (!draw || typeof (draw as any).getAll !== 'function') return
+    if (!draw) return
 
-    const allFeatures = draw.getAll()
-    if (!allFeatures || !Array.isArray(allFeatures.features)) return
-
-    const persistedFeatures = allFeatures.features.filter((feature: any) => feature?.properties?.__persisted)
+    const persistedFeatures = draw
+      .getAll()
+      .features.filter((feature: any) => feature?.properties?.__persisted)
 
     const existingIds = new Set(persistedFeatures.map((feature: any) => String(feature.id)))
     const incomingIds = new Set<string>()
@@ -184,46 +224,50 @@ function MapContainer({
   useEffect(() => {
     if (!map || !map.loaded()) return
 
-    const sourceId = 'blocks'
-    const source = map.getSource(sourceId) as mapboxgl.GeoJSONSource
-    const layerId = 'blocks-layer'
+    const blockSource = map.getSource(BLOCK_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
+    const labelSource = map.getSource(BLOCK_LABEL_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
 
-    if (blocks.length === 0) {
+    if (!Array.isArray(blocks) || blocks.length === 0) {
       // Remove everything if no blocks
       try {
-        if (map.getLayer('blocks-layer-labels')) map.removeLayer('blocks-layer-labels')
-        if (map.getLayer('blocks-layer-outline')) map.removeLayer('blocks-layer-outline')
-        if (map.getLayer('blocks-layer')) map.removeLayer('blocks-layer')
-        if (source) map.removeSource(sourceId)
+        if (map.getLayer(BLOCK_LABEL_LAYER_ID)) map.removeLayer(BLOCK_LABEL_LAYER_ID)
+        if (map.getLayer(BLOCK_OUTLINE_LAYER_ID)) map.removeLayer(BLOCK_OUTLINE_LAYER_ID)
+        if (map.getLayer(BLOCK_LAYER_ID)) map.removeLayer(BLOCK_LAYER_ID)
+        if (labelSource) map.removeSource(BLOCK_LABEL_SOURCE_ID)
+        if (blockSource) map.removeSource(BLOCK_SOURCE_ID)
       } catch (error) {
         // Ignore cleanup errors
       }
       return
     }
 
-    if (source) {
+    const blockFeatureCollection = {
+      type: 'FeatureCollection',
+      features: blocks as any,
+    }
+
+    const labelFeatureCollection = {
+      type: 'FeatureCollection',
+      features: buildLabelFeatures(blocks),
+    }
+
+    if (blockSource) {
       // Update existing source data
-      source.setData({
-        type: 'FeatureCollection',
-        features: blocks as any,
-      })
+      blockSource.setData(blockFeatureCollection as any)
     } else {
       // Create new source and layers together
-      console.log('🚀 Creating source and layers together')
-      map.addSource(sourceId, {
+      console.log('🚀 Creating block sources and layers')
+      map.addSource(BLOCK_SOURCE_ID, {
         type: 'geojson',
-        data: {
-          type: 'FeatureCollection',
-          features: blocks as any,
-        },
+        data: blockFeatureCollection as any,
       })
 
       // Immediately add layers after source is created
       try {
         map.addLayer({
-          id: layerId,
+          id: BLOCK_LAYER_ID,
           type: 'fill',
-          source: sourceId,
+          source: BLOCK_SOURCE_ID,
           paint: {
             'fill-color': '#6e59c7',
             'fill-opacity': 0.8,
@@ -231,9 +275,9 @@ function MapContainer({
         })
 
         map.addLayer({
-          id: `${layerId}-outline`,
+          id: BLOCK_OUTLINE_LAYER_ID,
           type: 'line',
-          source: sourceId,
+          source: BLOCK_SOURCE_ID,
           paint: {
             'line-color': '#6e59c7',
             'line-width': 3,
@@ -241,12 +285,21 @@ function MapContainer({
           },
         })
 
-        console.log('✅ Added block layers with source')
+        console.log('✅ Added block fill and outline layers')
       } catch (error) {
         console.error('Error adding layers with source:', error)
       }
     }
-  }, [map, blocks])
+
+    if (labelSource) {
+      labelSource.setData(labelFeatureCollection as any)
+    } else {
+      map.addSource(BLOCK_LABEL_SOURCE_ID, {
+        type: 'geojson',
+        data: labelFeatureCollection as any,
+      })
+    }
+  }, [map, blocks, buildLabelFeatures])
 
 
   // Debounced values for style updates to prevent flicker
@@ -265,15 +318,14 @@ function MapContainer({
   useEffect(() => {
     if (!map || !map.loaded()) return
 
-    const layerId = 'blocks-layer'
-    if (!map.getLayer(layerId)) return
+    if (!map.getLayer(BLOCK_LAYER_ID)) return
 
     try {
-      map.setPaintProperty(layerId, 'fill-color', debouncedColor)
-      map.setPaintProperty(layerId, 'fill-opacity', debouncedOpacity)
+      map.setPaintProperty(BLOCK_LAYER_ID, 'fill-color', debouncedColor)
+      map.setPaintProperty(BLOCK_LAYER_ID, 'fill-opacity', debouncedOpacity)
       
-      if (map.getLayer(`${layerId}-outline`)) {
-        map.setPaintProperty(`${layerId}-outline`, 'line-color', debouncedColor)
+      if (map.getLayer(BLOCK_OUTLINE_LAYER_ID)) {
+        map.setPaintProperty(BLOCK_OUTLINE_LAYER_ID, 'line-color', debouncedColor)
       }
     } catch (error) {
       // Ignore errors
@@ -285,11 +337,18 @@ function MapContainer({
     if (!map) return
 
     const transparentFillLayers = [
+      'gl-draw-polygon-fill',
       'gl-draw-polygon-fill-inactive.cold',
       'gl-draw-polygon-fill-inactive.hot',
       'gl-draw-polygon-fill-active',
     ]
-    const strokeLayers = ['gl-draw-polygon-stroke-inactive', 'gl-draw-polygon-stroke-active']
+
+    const legacyOutlineLayers = ['gl-draw-polygon-stroke-inactive', 'gl-draw-polygon-stroke-active']
+
+    const vertexHaloLayers = [
+      'gl-draw-polygon-and-line-vertex-halo-active',
+      'gl-draw-vertex-outer',
+    ]
 
     const applyStyles = () => {
       transparentFillLayers.forEach((layerId) => {
@@ -298,17 +357,33 @@ function MapContainer({
         }
       })
 
-      if (map.getLayer('gl-draw-polygon-stroke-inactive')) {
-        map.setPaintProperty('gl-draw-polygon-stroke-inactive', 'line-opacity', 0)
+      if (map.getLayer('gl-draw-lines')) {
+        map.setPaintProperty('gl-draw-lines', 'line-color', debouncedColor)
+        map.setPaintProperty('gl-draw-lines', 'line-width', 3)
+        map.setPaintProperty('gl-draw-lines', 'line-opacity', 1)
+        map.setPaintProperty('gl-draw-lines', 'line-dasharray', [2, 0])
       }
 
-      if (map.getLayer('gl-draw-polygon-stroke-active')) {
-        map.setPaintProperty('gl-draw-polygon-stroke-active', 'line-color', debouncedColor)
-        map.setPaintProperty('gl-draw-polygon-stroke-active', 'line-width', 3)
-      }
+      legacyOutlineLayers.forEach((layerId) => {
+        if (!map.getLayer(layerId)) return
+        if (layerId === 'gl-draw-polygon-stroke-inactive') {
+          map.setPaintProperty(layerId, 'line-opacity', 0)
+          return
+        }
+        map.setPaintProperty(layerId, 'line-color', debouncedColor)
+        map.setPaintProperty(layerId, 'line-width', 3)
+        map.setPaintProperty(layerId, 'line-opacity', 1)
+        map.setPaintProperty(layerId, 'line-dasharray', [2, 0])
+      })
 
-      if (map.getLayer('gl-draw-polygon-and-line-vertex-halo-active')) {
-        map.setPaintProperty('gl-draw-polygon-and-line-vertex-halo-active', 'circle-radius', 6)
+      vertexHaloLayers.forEach((layerId) => {
+        if (map.getLayer(layerId)) {
+          map.setPaintProperty(layerId, 'circle-radius', 6)
+        }
+      })
+
+      if (map.getLayer('gl-draw-vertex-inner')) {
+        map.setPaintProperty('gl-draw-vertex-inner', 'circle-color', debouncedColor)
       }
     }
 
@@ -327,12 +402,10 @@ function MapContainer({
   useEffect(() => {
     if (!map || !map.loaded()) return
 
-    const layerId = 'blocks-layer'
-    const outlineLayerId = `${layerId}-outline`
-    if (!map.getLayer(outlineLayerId)) return
+    if (!map.getLayer(BLOCK_OUTLINE_LAYER_ID)) return
 
     try {
-      map.setPaintProperty(outlineLayerId, 'line-width', [
+      map.setPaintProperty(BLOCK_OUTLINE_LAYER_ID, 'line-width', [
         'case',
         ['==', ['get', 'id'], selectedBlockId || ''],
         5,
@@ -348,15 +421,26 @@ function MapContainer({
   useEffect(() => {
     if (!map || !draw) return
 
-    const layerId = 'blocks-layer'
-    if (!map.getLayer(layerId)) return
+    if (!map.getLayer(BLOCK_LAYER_ID)) return
 
     const handleMouseEnter = () => {
-      map.getCanvas().style.cursor = 'pointer'
+      map.getCanvas().style.cursor = 'move'
     }
 
     const handleMouseLeave = () => {
       map.getCanvas().style.cursor = ''
+    }
+
+    const handleMouseDown = (e: any) => {
+      const feature = e?.features?.[0]
+      const blockId = getBlockIdentifier(feature)
+      if (!blockId) return
+      e.preventDefault()
+      try {
+        draw.changeMode('direct_select', { featureId: blockId })
+      } catch (error) {
+        console.error('Failed to enter direct_select mode:', error)
+      }
     }
 
     const handleClick = (e: any) => {
@@ -367,53 +451,95 @@ function MapContainer({
         return
       }
       e.preventDefault()
+      try {
+        draw.changeMode('simple_select', { featureIds: [blockId] })
+      } catch (error) {
+        console.error('Failed to select block:', error)
+      }
       onBlockSelect?.(blockId, feature)
     }
 
-    map.on('mouseenter', layerId, handleMouseEnter)
-    map.on('mouseleave', layerId, handleMouseLeave)
-    map.on('click', layerId, handleClick)
+    const handleDoubleClick = (e: any) => {
+      const feature = e?.features?.[0]
+      const blockId = getBlockIdentifier(feature)
+      if (!blockId) return
+      e.preventDefault()
+      try {
+        draw.changeMode('direct_select', { featureId: blockId })
+      } catch (error) {
+        console.error('Failed to enter edit mode for block:', error)
+      }
+      if (feature?.geometry) {
+        onBlockDoubleClick?.(blockId, feature)
+      }
+    }
+
+    map.on('mouseenter', BLOCK_LAYER_ID, handleMouseEnter)
+    map.on('mouseleave', BLOCK_LAYER_ID, handleMouseLeave)
+    map.on('mousedown', BLOCK_LAYER_ID, handleMouseDown)
+    map.on('click', BLOCK_LAYER_ID, handleClick)
+    map.on('dblclick', BLOCK_LAYER_ID, handleDoubleClick)
+
+    const doubleClickZoom = map.doubleClickZoom
+    const wasDoubleClickZoomEnabled = doubleClickZoom.isEnabled()
+    if (wasDoubleClickZoomEnabled) {
+      doubleClickZoom.disable()
+    }
 
     return () => {
-      map.off('mouseenter', layerId, handleMouseEnter)
-      map.off('mouseleave', layerId, handleMouseLeave)
-      map.off('click', layerId, handleClick)
+      map.off('mouseenter', BLOCK_LAYER_ID, handleMouseEnter)
+      map.off('mouseleave', BLOCK_LAYER_ID, handleMouseLeave)
+      map.off('mousedown', BLOCK_LAYER_ID, handleMouseDown)
+      map.off('click', BLOCK_LAYER_ID, handleClick)
+      map.off('dblclick', BLOCK_LAYER_ID, handleDoubleClick)
+      if (wasDoubleClickZoomEnabled) {
+        doubleClickZoom.enable()
+      }
     }
-  }, [map, draw, onBlockSelect, getBlockIdentifier])
+  }, [map, draw, onBlockSelect, onBlockDoubleClick, getBlockIdentifier])
 
   // Handle label visibility
   useEffect(() => {
     if (!map || !map.loaded()) return
 
-    const sourceId = 'blocks'
-    const layerId = 'blocks-layer'
     const labelType = vizSettings?.labelBy || 'noLabel'
-
-    if (!map.getSource(sourceId)) return
 
     try {
       if (labelType === 'noLabel') {
-        if (map.getLayer(`${layerId}-labels`)) {
-          map.removeLayer(`${layerId}-labels`)
+        if (map.getLayer(BLOCK_LABEL_LAYER_ID)) {
+          map.removeLayer(BLOCK_LABEL_LAYER_ID)
         }
+        return
+      }
+
+      if (!map.getSource(BLOCK_LABEL_SOURCE_ID)) return
+
+      const labelExpression: any =
+        labelType === 'headerValue'
+          ? ['coalesce', ['get', 'headerValue'], ['get', 'name'], 'Unnamed Block']
+          : ['coalesce', ['get', 'name'], 'Unnamed Block']
+
+      if (!map.getLayer(BLOCK_LABEL_LAYER_ID)) {
+        map.addLayer({
+          id: BLOCK_LABEL_LAYER_ID,
+          type: 'symbol',
+          source: BLOCK_LABEL_SOURCE_ID,
+          layout: {
+            'text-field': labelExpression,
+            'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+            'text-size': 12,
+            'symbol-placement': 'point',
+            'text-variable-anchor': ['center'],
+            'text-justify': 'center',
+          },
+          paint: {
+            'text-color': '#333',
+            'text-halo-color': '#fff',
+            'text-halo-width': 2,
+          },
+        })
       } else {
-        if (!map.getLayer(`${layerId}-labels`)) {
-          map.addLayer({
-            id: `${layerId}-labels`,
-            type: 'symbol',
-            source: sourceId,
-            layout: {
-              'text-field': ['coalesce', ['get', 'name'], 'Unnamed Block'],
-              'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-              'text-size': 12,
-            },
-            paint: {
-              'text-color': '#333',
-              'text-halo-color': '#fff',
-              'text-halo-width': 2,
-            },
-          })
-        }
+        map.setLayoutProperty(BLOCK_LABEL_LAYER_ID, 'text-field', labelExpression)
       }
     } catch (error) {
       // Ignore errors
