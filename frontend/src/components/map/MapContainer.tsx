@@ -271,82 +271,93 @@ function MapContainer({
 
   // Handle blocks data updates - only when blocks change or source doesn't exist
   useEffect(() => {
-    if (!map || !map.loaded()) return
+    if (!map) return
 
-    const blockSource = map.getSource(BLOCK_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
-    const labelSource = map.getSource(BLOCK_LABEL_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
+    const applyData = () => {
+      const blockSource = map.getSource(BLOCK_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
+      const labelSource = map.getSource(BLOCK_LABEL_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
 
-    if (!Array.isArray(blocks) || blocks.length === 0) {
-      // Remove everything if no blocks
-      try {
-        if (map.getLayer(BLOCK_LABEL_LAYER_ID)) map.removeLayer(BLOCK_LABEL_LAYER_ID)
-        if (map.getLayer(BLOCK_OUTLINE_LAYER_ID)) map.removeLayer(BLOCK_OUTLINE_LAYER_ID)
-        if (map.getLayer(BLOCK_LAYER_ID)) map.removeLayer(BLOCK_LAYER_ID)
-        if (labelSource) map.removeSource(BLOCK_LABEL_SOURCE_ID)
-        if (blockSource) map.removeSource(BLOCK_SOURCE_ID)
-      } catch (error) {
-        // Ignore cleanup errors
+      if (!Array.isArray(blocks) || blocks.length === 0) {
+        // Remove everything if no blocks
+        try {
+          if (map.getLayer(BLOCK_LABEL_LAYER_ID)) map.removeLayer(BLOCK_LABEL_LAYER_ID)
+          if (map.getLayer(BLOCK_OUTLINE_LAYER_ID)) map.removeLayer(BLOCK_OUTLINE_LAYER_ID)
+          if (map.getLayer(BLOCK_LAYER_ID)) map.removeLayer(BLOCK_LAYER_ID)
+          if (labelSource) map.removeSource(BLOCK_LABEL_SOURCE_ID)
+          if (blockSource) map.removeSource(BLOCK_SOURCE_ID)
+        } catch (error) {
+          // Ignore cleanup errors
+        }
+        return
       }
-      return
-    }
 
-    const blockFeatureCollection = {
-      type: 'FeatureCollection',
-      features: blocks as any,
-    }
+      const blockFeatureCollection = {
+        type: 'FeatureCollection',
+        features: blocks as any,
+      }
 
-    const labelFeatureCollection = {
-      type: 'FeatureCollection',
-      features: buildLabelFeatures(blocks),
-    }
+      const labelFeatureCollection = {
+        type: 'FeatureCollection',
+        features: buildLabelFeatures(blocks),
+      }
 
-    if (blockSource) {
-      // Update existing source data
-      blockSource.setData(blockFeatureCollection as any)
-    } else {
-      // Create new source and layers together
-      console.log('🚀 Creating block sources and layers')
-      map.addSource(BLOCK_SOURCE_ID, {
-        type: 'geojson',
-        data: blockFeatureCollection as any,
-      })
-
-      // Immediately add layers after source is created
-      try {
-        map.addLayer({
-          id: BLOCK_LAYER_ID,
-          type: 'fill',
-          source: BLOCK_SOURCE_ID,
-          paint: {
-            'fill-color': '#6e59c7',
-            'fill-opacity': 0.8,
-          },
+      if (blockSource) {
+        // Update existing source data
+        blockSource.setData(blockFeatureCollection as any)
+      } else {
+        // Create new source and layers together
+        console.log('🚀 Creating block sources and layers')
+        map.addSource(BLOCK_SOURCE_ID, {
+          type: 'geojson',
+          data: blockFeatureCollection as any,
         })
 
-        map.addLayer({
-          id: BLOCK_OUTLINE_LAYER_ID,
-          type: 'line',
-          source: BLOCK_SOURCE_ID,
-          paint: {
-            'line-color': '#6e59c7',
-            'line-width': 3,
-            'line-opacity': 1.0,
-          },
-        })
+        // Immediately add layers after source is created
+        try {
+          map.addLayer({
+            id: BLOCK_LAYER_ID,
+            type: 'fill',
+            source: BLOCK_SOURCE_ID,
+            paint: {
+              'fill-color': '#6e59c7',
+              'fill-opacity': 0.8,
+            },
+          })
 
-      } catch (error) {
-        console.error('Error adding layers with source:', error)
+          map.addLayer({
+            id: BLOCK_OUTLINE_LAYER_ID,
+            type: 'line',
+            source: BLOCK_SOURCE_ID,
+            paint: {
+              'line-color': '#6e59c7',
+              'line-width': 3,
+              'line-opacity': 1.0,
+            },
+          })
+
+        } catch (error) {
+          console.error('Error adding layers with source:', error)
+        }
+      }
+
+      if (labelSource) {
+        labelSource.setData(labelFeatureCollection as any)
+      } else {
+        map.addSource(BLOCK_LABEL_SOURCE_ID, {
+          type: 'geojson',
+          data: labelFeatureCollection as any,
+        })
       }
     }
 
-    if (labelSource) {
-      labelSource.setData(labelFeatureCollection as any)
-    } else {
-      map.addSource(BLOCK_LABEL_SOURCE_ID, {
-        type: 'geojson',
-        data: labelFeatureCollection as any,
-      })
+    if (!map.loaded()) {
+      map.once('load', applyData)
+      return () => {
+        map.off('load', applyData)
+      }
     }
+
+    applyData()
   }, [map, blocks, buildLabelFeatures])
 
 
