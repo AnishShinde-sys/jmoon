@@ -202,11 +202,16 @@ router.put('/:farmId', authenticate, async (req: AuthRequest, res) => {
 
     const farm = await gcsClient.readJSON<Farm>(farmPath)
 
-    // Check if user is owner (only owner can update)
-    if (farm.owner !== userId) {
+    const userRole = farm.permissions?.[userId]
+    const canEditFarm =
+      farm.owner === userId ||
+      userRole === 'Administrator' ||
+      userRole === 'Editor'
+
+    if (!canEditFarm) {
       return res.status(403).json({
         error: 'Forbidden',
-        message: 'Only the farm owner can update farm details',
+        message: 'You do not have permission to update this farm',
       })
     }
 

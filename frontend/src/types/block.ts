@@ -50,6 +50,18 @@ export interface Block {
   geometry?: GeoJSON.Polygon | GeoJSON.MultiPolygon
 }
 
+export interface BlockRevision {
+  id: string
+  farmId: string
+  blockId: string
+  createdAt: string
+  geometry: GeoJSON.Geometry
+  properties: Block
+  revisionMessage?: string
+  updatedBy?: string
+  updatedByName?: string
+}
+
 export interface CreateBlockInput {
   name: string
   description?: string

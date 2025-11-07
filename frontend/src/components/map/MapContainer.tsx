@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState, memo } from 'react'
 import mapboxgl from 'mapbox-gl'
+import MapboxDraw from '@mapbox/mapbox-gl-draw'
 import * as turf from '@turf/turf'
 import { useMapContext } from '@/context/MapContext'
+
+import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css'
 
 const BLOCK_SOURCE_ID = 'blocks'
 const BLOCK_LAYER_ID = 'blocks-layer'
@@ -39,8 +42,10 @@ function MapContainer({
   selectedBlockId = null,
 }: MapContainerProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null)
-  const { map, setMap } = useMapContext()
+  const drawControlRef = useRef<MapboxDraw | null>(null)
+  const { map, setMap, draw, setDraw, drawingEnabled } = useMapContext()
   const [tokenMissing, setTokenMissing] = useState(false)
+  const blocksBoundsRef = useRef<string | null>(null)
 
   const getBlockIdentifier = useCallback((feature: any): string | null => {
     if (!feature) return null
@@ -142,6 +147,18 @@ function MapContainer({
       setTimeout(() => {
         newMap.resize()
       }, 100)
+
+      const drawControl = new MapboxDraw({
+        displayControlsDefault: false,
+        controls: {
+          polygon: true,
+          trash: true,
+        },
+        defaultMode: 'simple_select',
+      })
+      drawControlRef.current = drawControl
+      newMap.addControl(drawControl as any, 'top-left')
+      setDraw(drawControl)
       
       setMap(newMap)
       if (onLoad) onLoad(newMap)
@@ -149,12 +166,108 @@ function MapContainer({
 
     // Cleanup
     return () => {
+      if (drawControlRef.current) {
+        try {
+          newMap.removeControl(drawControlRef.current as any)
+        } catch (error) {
+          // ignore cleanup errors
+        }
+        drawControlRef.current = null
+      }
       newMap.remove()
       setMap(null)
+      setDraw(null)
     }
   }, []) // Remove dependencies to prevent re-initialization
 
+  useEffect(() => {
+    if (!map || !drawControlRef.current) return
+    const controlContainer = map.getContainer().querySelector('.mapbox-gl-draw_ctrl-top-left') as HTMLElement | null
+    if (!controlContainer) return
+    controlContainer.style.display = drawingEnabled ? '' : 'none'
+  }, [map, drawingEnabled])
+
   // Keep persisted farm blocks mirrored inside Mapbox Draw so they can be edited
+  useEffect(() => {
+    if (!draw || typeof (draw as any).getAll !== 'function') return
+
+    if (!drawingEnabled) {
+      try {
+        if (typeof (draw as any).deleteAll === 'function') {
+          draw.deleteAll()
+        }
+      } catch (error) {
+        console.warn('Failed to clear draw features:', error)
+      }
+      return
+    }
+
+    let persistedCollection: any = null
+    try {
+      persistedCollection = draw.getAll()
+    } catch (error) {
+      console.warn('Failed to read persisted draw features:', error)
+      return
+    }
+
+    const persistedFeatures = Array.isArray(persistedCollection?.features)
+      ? persistedCollection.features.filter((feature: any) => feature?.properties?.__persisted)
+      : []
+
+    const existingIds = new Set(persistedFeatures.map((feature: any) => String(feature.id)))
+    const incomingIds = new Set<string>()
+
+    if (Array.isArray(blocks)) {
+      blocks.forEach((feature: any) => {
+        if (!feature?.geometry) return
+        const blockId = getBlockIdentifier(feature)
+        if (!blockId) return
+
+        incomingIds.add(blockId)
+        if (!existingIds.has(blockId)) {
+          try {
+            if (typeof (draw as any).add === 'function') {
+              draw.add({
+                id: blockId,
+                type: 'Feature',
+                geometry: feature.geometry,
+                properties: {
+                  ...feature.properties,
+                  __persisted: true,
+                },
+              } as any)
+            }
+          } catch (error) {
+            console.error('Failed to add block feature to draw:', error)
+          }
+        } else {
+          try {
+            if (typeof (draw as any).setFeatureProperty === 'function') {
+              draw.setFeatureProperty(blockId, '__persisted', true)
+              if (feature?.properties?.fillColor) {
+                draw.setFeatureProperty(blockId, 'fillColor', feature.properties.fillColor)
+              }
+            }
+          } catch (error) {
+            // Ignore property update errors
+          }
+        }
+      })
+    }
+
+    persistedFeatures.forEach((feature: any) => {
+      const featureId = String(feature.id)
+      if (!incomingIds.has(featureId)) {
+        try {
+          if (typeof (draw as any).delete === 'function') {
+            draw.delete(featureId)
+          }
+        } catch (error) {
+          console.error('Failed to remove stale block feature from draw:', error)
+        }
+      }
+    })
+  }, [draw, blocks, getBlockIdentifier, drawingEnabled])
 
   // Handle blocks data updates - only when blocks change or source doesn't exist
   useEffect(() => {
@@ -221,7 +334,6 @@ function MapContainer({
           },
         })
 
-        console.log('✅ Added block fill and outline layers')
       } catch (error) {
         console.error('Error adding layers with source:', error)
       }
@@ -282,7 +394,6 @@ function MapContainer({
         5,
         2
       ])
-      console.log('✅ Updated selection highlight')
     } catch (error) {
       console.error('Error updating selection:', error)
     }
@@ -339,7 +450,7 @@ function MapContainer({
         doubleClickZoom.enable()
       }
     }
-  }, [map, onBlockSelect, onBlockDoubleClick, getBlockIdentifier])
+  }, [map, blocks, onBlockSelect, onBlockDoubleClick, getBlockIdentifier])
 
   // Handle label visibility
   useEffect(() => {
@@ -390,51 +501,62 @@ function MapContainer({
   }, [map, vizSettings?.labelBy])
 
 
-  // Setup drawing controls
   useEffect(() => {
-    if (!map) return
+    blocksBoundsRef.current = null
+  }, [map])
 
-    // Create draw control with all controls hidden (we'll use custom buttons)
-    const newDraw = new MapboxDraw({
-      displayControlsDefault: false,
-      controls: {
-        polygon: false,
-        point: false,
-        line_string: false,
-        trash: false,
-      },
-      defaultMode: 'simple_select',
-      userProperties: true,
-    })
+  useEffect(() => {
+    if (!map || !map.loaded()) return
 
-    map.addControl(newDraw as any, 'top-left')
-    setDraw(newDraw)
+    if (!Array.isArray(blocks) || blocks.length === 0) {
+      blocksBoundsRef.current = null
+      return
+    }
 
-    if (!enableDrawing) {
-      try {
-        newDraw.changeMode('static')
-      } catch (error) {
-        console.warn('Failed to set draw to static mode:', error)
+    try {
+      const collection = {
+        type: 'FeatureCollection',
+        features: blocks as any,
       }
-    }
 
-    // Setup event listeners
-    if (enableDrawing && onDrawCreate) {
-      map.on('draw.create', onDrawCreate)
-    }
-    if (enableDrawing && onDrawUpdate) {
-      map.on('draw.update', onDrawUpdate)
-    }
-    if (enableDrawing && onDrawDelete) {
-      map.on('draw.delete', onDrawDelete)
-    }
+      const bboxValues = turf.bbox(collection)
+      if (!bboxValues || bboxValues.length !== 4) {
+        return
+      }
 
-    return () => {
-      if (enableDrawing && onDrawCreate) map.off('draw.create', onDrawCreate)
-      if (enableDrawing && onDrawUpdate) map.off('draw.update', onDrawUpdate)
-      if (enableDrawing && onDrawDelete) map.off('draw.delete', onDrawDelete)
+      const [minLng, minLat, maxLng, maxLat] = bboxValues as [number, number, number, number]
+      if (
+        !Number.isFinite(minLng) ||
+        !Number.isFinite(minLat) ||
+        !Number.isFinite(maxLng) ||
+        !Number.isFinite(maxLat)
+      ) {
+        return
+      }
+
+      const serializedBounds = JSON.stringify([minLng, minLat, maxLng, maxLat])
+      if (blocksBoundsRef.current === serializedBounds) {
+        return
+      }
+
+      const hadPriorBounds = blocksBoundsRef.current !== null
+      blocksBoundsRef.current = serializedBounds
+
+      map.fitBounds(
+        [
+          [minLng, minLat],
+          [maxLng, maxLat],
+        ],
+        {
+          padding: 80,
+          duration: hadPriorBounds ? 600 : 0,
+        }
+      )
+    } catch (error) {
+      console.warn('Failed to auto-fit map to blocks:', error)
     }
-  }, [map, onDrawCreate, onDrawUpdate, onDrawDelete, setDraw, enableDrawing])
+  }, [map, blocks])
+
 
   return (
     <div className="relative w-full h-full" style={{ width: '100%', height: '100%' }}>

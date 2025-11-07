@@ -1,4 +1,4 @@
-import { useId, useRef, type ChangeEvent } from 'react'
+import { useId, useRef, useState, useMemo, type ChangeEvent, useEffect } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -7,7 +7,9 @@ import type { Farm, VizSettings } from '@/types/farm'
 
 interface FarmVizSettingsProps {
   farm: Farm
-  onUpdate: (settings: Farm['vizSettings']) => void
+  onUpdate: (settings: VizSettings) => Promise<void> | void
+  onPreviewChange?: (settings: VizSettings) => void
+  onPreviewReset?: () => void
 }
 
 const defaultVizSettings: VizSettings = {
@@ -42,24 +44,41 @@ const labelOptions: Array<{
   },
 ]
 
-export default function FarmVizSettings({ farm, onUpdate }: FarmVizSettingsProps) {
-  const vizSettings: VizSettings = {
+export default function FarmVizSettings({ farm, onUpdate, onPreviewChange, onPreviewReset }: FarmVizSettingsProps) {
+  const initialSettings: VizSettings = useMemo(() => ({
     ...defaultVizSettings,
     ...(farm.vizSettings ?? {}),
-  }
+  }), [farm.vizSettings])
+
+  const [pendingSettings, setPendingSettings] = useState<VizSettings>(initialSettings)
+  const [submitting, setSubmitting] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    setPendingSettings(initialSettings)
+    setErrorMessage(null)
+  }, [initialSettings])
 
   const opacitySliderId = useId()
   const opacityInputId = useId()
   const colorPickerId = useId()
   const colorInputRef = useRef<HTMLInputElement>(null)
 
-  const opacityPercent = Math.round(vizSettings.colorOpacity * 100)
+  const hasChanges = useMemo(() => {
+    return (
+      Math.abs(pendingSettings.colorOpacity - initialSettings.colorOpacity) > 0.001 ||
+      pendingSettings.blockColor.toLowerCase() !== initialSettings.blockColor.toLowerCase() ||
+      pendingSettings.labelBy !== initialSettings.labelBy
+    )
+  }, [pendingSettings, initialSettings])
+
+  const opacityPercent = Math.round(pendingSettings.colorOpacity * 100)
 
   const updateOpacity = (normalizedValue: number) => {
     if (Number.isNaN(normalizedValue)) return
     const clamped = Math.max(0, Math.min(1, normalizedValue))
     const rounded = Math.round(clamped * 100) / 100
-    onUpdate({ ...vizSettings, colorOpacity: rounded })
+    setPendingSettings((prev) => ({ ...prev, colorOpacity: rounded }))
   }
 
   const handleOpacitySliderChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -70,21 +89,102 @@ export default function FarmVizSettings({ farm, onUpdate }: FarmVizSettingsProps
     updateOpacity(event.target.valueAsNumber / 100)
   }
 
+  const normalizeHex = (value: string) => {
+    if (!value) return ''
+    const formatted = value.startsWith('#') ? value : `#${value}`
+    return formatted.slice(0, 7)
+  }
+
   const updateColor = (color: string) => {
     if (!color) return
-    onUpdate({ ...vizSettings, blockColor: color })
+    const normalized = normalizeHex(color)
+    if (normalized.length < 4) return
+    setPendingSettings((prev) => ({ ...prev, blockColor: normalized }))
   }
 
   const handleColorPickerChange = (event: ChangeEvent<HTMLInputElement>) => {
     updateColor(event.target.value)
   }
 
-  const handleLabelChange = (labelType: VizSettings['labelBy']) => {
-    onUpdate({ ...vizSettings, labelBy: labelType })
+  const handleColorInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value.trim()
+    setPendingSettings((prev) => ({ ...prev, blockColor: normalizeHex(value) }))
   }
 
+  const handleColorInputBlur = () => {
+    setPendingSettings((prev) => ({ ...prev, blockColor: normalizeHex(prev.blockColor) }))
+  }
+
+  const handleLabelChange = (labelType: VizSettings['labelBy']) => {
+    setPendingSettings((prev) => ({ ...prev, labelBy: labelType }))
+  }
+
+  const handleSave = async () => {
+    if (!hasChanges) return
+    setSubmitting(true)
+    setErrorMessage(null)
+    try {
+      await onUpdate({ ...pendingSettings })
+    } catch (error) {
+      console.error('Failed to update visualization settings:', error)
+      setErrorMessage('Could not save changes. Try again or check your access rights.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleReset = () => {
+    setPendingSettings(initialSettings)
+    setErrorMessage(null)
+  }
+
+  useEffect(() => {
+    if (hasChanges) {
+      onPreviewChange?.({ ...pendingSettings })
+    } else {
+      onPreviewReset?.()
+    }
+  }, [hasChanges, pendingSettings, onPreviewChange, onPreviewReset])
+
+  useEffect(() => {
+    return () => {
+      onPreviewReset?.()
+    }
+  }, [onPreviewReset])
+
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-900">Visualization Settings</h2>
+          <p className="text-xs text-gray-500">Adjust how blocks render on your map.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleReset}
+            disabled={!hasChanges || submitting}
+          >
+            Reset
+          </Button>
+          <Button
+            type="button"
+            onClick={handleSave}
+            disabled={!hasChanges || submitting}
+          >
+            {submitting ? 'Saving…' : 'Save Changes'}
+          </Button>
+        </div>
+      </div>
+
+      {errorMessage && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {errorMessage}
+        </div>
+      )}
+
       <section className="rounded-xl border border-gray-200 bg-white/95 p-4 shadow-sm">
         <div className="space-y-1">
           <h3 className="text-sm font-semibold text-gray-800">Block Opacity</h3>
@@ -162,12 +262,12 @@ export default function FarmVizSettings({ farm, onUpdate }: FarmVizSettingsProps
             <div className="flex items-center gap-3">
               <span
                 className="h-10 w-10 rounded-md border border-gray-300 shadow-inner"
-                style={{ backgroundColor: vizSettings.blockColor }}
+                style={{ backgroundColor: pendingSettings.blockColor }}
                 aria-hidden="true"
               />
               <div>
                 <p className="text-xs uppercase tracking-wide text-gray-500">Current</p>
-                <p className="font-mono text-sm text-gray-800">{vizSettings.blockColor.toUpperCase()}</p>
+                <p className="font-mono text-sm text-gray-800">{pendingSettings.blockColor.toUpperCase()}</p>
               </div>
             </div>
 
@@ -185,14 +285,27 @@ export default function FarmVizSettings({ farm, onUpdate }: FarmVizSettingsProps
               id={colorPickerId}
               type="color"
               className="sr-only"
-              value={vizSettings.blockColor}
+              value={pendingSettings.blockColor}
               onChange={handleColorPickerChange}
             />
+            <div className="flex items-center gap-2">
+              <label htmlFor="block-color-text" className="sr-only">
+                Hex color value
+              </label>
+              <Input
+                id="block-color-text"
+                value={pendingSettings.blockColor}
+                onChange={handleColorInputChange}
+                onBlur={handleColorInputBlur}
+                className="w-32 font-mono text-sm"
+                maxLength={7}
+              />
+            </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
             {presetColors.map((color) => {
-              const isActive = color.toLowerCase() === vizSettings.blockColor.toLowerCase()
+              const isActive = color.toLowerCase() === pendingSettings.blockColor.toLowerCase()
               return (
                 <button
                   key={color}
@@ -221,7 +334,7 @@ export default function FarmVizSettings({ farm, onUpdate }: FarmVizSettingsProps
 
         <div className="mt-4 grid gap-2">
           {labelOptions.map((option) => {
-            const isActive = vizSettings.labelBy === option.value
+            const isActive = pendingSettings.labelBy === option.value
             return (
               <button
                 key={option.value}
@@ -242,6 +355,24 @@ export default function FarmVizSettings({ farm, onUpdate }: FarmVizSettingsProps
           })}
         </div>
       </section>
+
+      <div className="flex justify-end gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={handleReset}
+          disabled={!hasChanges || submitting}
+        >
+          Reset
+        </Button>
+        <Button
+          type="button"
+          onClick={handleSave}
+          disabled={!hasChanges || submitting}
+        >
+          {submitting ? 'Saving…' : 'Save Changes'}
+        </Button>
+      </div>
     </div>
   )
 }

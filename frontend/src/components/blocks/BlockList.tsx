@@ -1,514 +1,265 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import type mapboxgl from 'mapbox-gl'
-import { CheckCircleIcon, MapIcon, TrashIcon } from '@heroicons/react/24/outline'
+import { useMemo, useState } from 'react'
+import clsx from 'clsx'
+import type { Feature } from 'geojson'
+import {
+  ArrowsUpDownIcon,
+  FunnelIcon,
+  MagnifyingGlassIcon,
+  MapIcon,
+  PlusSmallIcon,
+  TrashIcon,
+} from '@heroicons/react/24/outline'
 
-import BulkUpdateModal from '@/components/blocks/BulkUpdateModal'
-import Spinner from '@/components/ui/Spinner'
-import { Button } from '@/components/ui/button'
-import { useMapContext } from '@/context/MapContext'
-import { Block, BlockFieldDefinition } from '@/types/block'
-import { formatArea } from '@/lib/utils'
+import type { Block, BlockFieldDefinition } from '@/types/block'
+import type { MeasurementSystem } from '@/types/user'
 
-interface SelectedBlock {
-  id: string
-  feature: GeoJSON.Feature
-}
-
-export interface BlockListProps {
-  blocks: GeoJSON.Feature[]
+interface BlockListProps {
+  blocks: Feature[]
   blockEntities: Block[]
-  measurementSystem?: 'Metric' | 'Imperial'
   blockFields?: BlockFieldDefinition[]
+  measurementSystem?: MeasurementSystem
   loading?: boolean
-  onRefresh?: () => Promise<void> | void
   onCreateBlocks?: () => void
+  isCreatingBlock?: boolean
+  selectedBlockId?: string | null
   onOpenBlockDetails?: (blockId: string) => void
   onEditBlock?: (blockId: string) => void
   onDeleteBlocks?: (blockIds: string[]) => Promise<void> | void
-  onBulkUpdate?: (
-    field: BlockFieldDefinition,
-    value: unknown,
-    blockIds: string[]
-  ) => Promise<void> | void
+  onBulkUpdate?: (field: BlockFieldDefinition, value: unknown, blockIds: string[]) => Promise<void> | void
   onRequestSelectOnMap?: () => void
+  onRefresh?: () => Promise<void> | void
 }
 
-const HIGHLIGHT_SOURCE_ID = 'select-blocks-highlight'
-const HIGHLIGHT_LAYER_ID = 'select-blocks-highlight-fill'
-const HIGHLIGHT_OUTLINE_LAYER_ID = 'select-blocks-highlight-outline'
-const MAP_SELECT_LAYER_ID = 'select-blocks-layer'
-const MAP_SELECT_OUTLINE_LAYER_ID = 'select-blocks-layer-outline'
+interface BlockRow {
+  id: string
+  name: string
+  area?: number
+  variety?: string
+  updatedAt?: string
+  feature?: Feature | null
+}
+
+function getBlockId(feature: Feature): string | null {
+  const props = (feature.properties ?? {}) as Record<string, unknown>
+  const raw = feature.id ?? props.id ?? props.blockId
+  if (raw === undefined || raw === null) return null
+  return String(raw)
+}
+
+function formatArea(area: number | undefined, measurementSystem?: MeasurementSystem) {
+  if (typeof area !== 'number' || Number.isNaN(area)) return '—'
+  const value = measurementSystem === 'Imperial' ? area * 0.000247105 : area / 10_000
+  const unit = measurementSystem === 'Imperial' ? 'ac' : 'ha'
+  return `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit}`
+}
+
+function formatUpdatedAt(updatedAt?: string) {
+  if (!updatedAt) return '—'
+  const date = new Date(updatedAt)
+  if (Number.isNaN(date.getTime())) return '—'
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
 
 export default function BlockList({
   blocks,
   blockEntities,
-  measurementSystem = 'Metric',
-  blockFields = [],
+  blockFields,
+  measurementSystem,
   loading,
   onCreateBlocks,
+  isCreatingBlock,
+  selectedBlockId,
   onOpenBlockDetails,
   onEditBlock,
   onDeleteBlocks,
   onBulkUpdate,
   onRequestSelectOnMap,
+  onRefresh,
 }: BlockListProps) {
-  const { map } = useMapContext()
+  const [searchTerm, setSearchTerm] = useState('')
+  const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([])
+  const [sortAscending, setSortAscending] = useState(true)
 
-  const [selectedBlocks, setSelectedBlocks] = useState<SelectedBlock[]>([])
-  const [mapSelectMode, setMapSelectMode] = useState(false)
-  const [showBulkUpdate, setShowBulkUpdate] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-  const [bulkUpdating, setBulkUpdating] = useState(false)
-
-  const featureLookup = useMemo(() => {
-    const map = new Map<string, GeoJSON.Feature>()
+  const featureById = useMemo(() => {
+    const map = new Map<string, Feature>()
     blocks.forEach((feature) => {
-      const id = getFeatureBlockId(feature)
-      if (id) {
-        map.set(id, feature)
+      const blockId = getBlockId(feature)
+      if (blockId) {
+        map.set(blockId, feature)
       }
     })
     return map
   }, [blocks])
 
-  const derivedFields = useMemo(() => {
-    if (blockFields.length > 0) {
-      return blockFields
-    }
-    if (!blocks.length) return []
-
-    const first = blocks[0]
-    const props = (first.properties as Record<string, unknown>) || {}
-    return Object.keys(props)
-      .filter((key) => !['id', 'name', 'description', 'area', 'variety', 'plantingYear', 'rowSpacing', 'vineSpacing'].includes(key))
-      .map<BlockFieldDefinition>((key) => ({
-        label: key,
-        machineName: key,
-        type: typeof props[key] === 'number' ? 'Number' : 'Text',
+  const rows = useMemo<BlockRow[]>(() => {
+    if (blockEntities.length) {
+      return blockEntities.map((block) => ({
+        id: block.id,
+        name: block.name || 'Unnamed Block',
+        area: block.area,
+        variety: block.variety,
+        updatedAt: block.updatedAt,
+        feature: featureById.get(block.id) ?? null,
       }))
-  }, [blockFields, blocks])
-
-  const selectedIds = useMemo(() => selectedBlocks.map((item) => item.id), [selectedBlocks])
-
-  const highlightGeoJson = useMemo<GeoJSON.FeatureCollection>(() => ({
-    type: 'FeatureCollection',
-    features: selectedBlocks.map((item) => item.feature),
-  }), [selectedBlocks])
-
-  const updateHighlightLayer = useCallback(() => {
-    if (!map) return
-
-    if (!selectedBlocks.length) {
-      if (map.getLayer(HIGHLIGHT_LAYER_ID)) map.removeLayer(HIGHLIGHT_LAYER_ID)
-      if (map.getLayer(HIGHLIGHT_OUTLINE_LAYER_ID)) map.removeLayer(HIGHLIGHT_OUTLINE_LAYER_ID)
-      if (map.getSource(HIGHLIGHT_SOURCE_ID)) map.removeSource(HIGHLIGHT_SOURCE_ID)
-      return
     }
 
-    if (map.getSource(HIGHLIGHT_SOURCE_ID)) {
-      ;(map.getSource(HIGHLIGHT_SOURCE_ID) as mapboxgl.GeoJSONSource).setData(highlightGeoJson)
-    } else {
-      map.addSource(HIGHLIGHT_SOURCE_ID, {
-        type: 'geojson',
-        data: highlightGeoJson,
-      })
-    }
-
-    if (!map.getLayer(HIGHLIGHT_LAYER_ID)) {
-      map.addLayer({
-        id: HIGHLIGHT_LAYER_ID,
-        type: 'fill',
-        source: HIGHLIGHT_SOURCE_ID,
-        paint: {
-          'fill-color': '#ffc107',
-          'fill-opacity': 0.55,
-        },
-      })
-    }
-
-    if (!map.getLayer(HIGHLIGHT_OUTLINE_LAYER_ID)) {
-      map.addLayer({
-        id: HIGHLIGHT_OUTLINE_LAYER_ID,
-        type: 'line',
-        source: HIGHLIGHT_SOURCE_ID,
-        paint: {
-          'line-color': '#ffffff',
-          'line-width': 2,
-        },
-      })
-    }
-  }, [highlightGeoJson, map, selectedBlocks.length])
-
-  useEffect(() => {
-    updateHighlightLayer()
-    return () => {
-      if (map) {
-        if (map.getLayer(HIGHLIGHT_LAYER_ID)) map.removeLayer(HIGHLIGHT_LAYER_ID)
-        if (map.getLayer(HIGHLIGHT_OUTLINE_LAYER_ID)) map.removeLayer(HIGHLIGHT_OUTLINE_LAYER_ID)
-        if (map.getSource(HIGHLIGHT_SOURCE_ID)) map.removeSource(HIGHLIGHT_SOURCE_ID)
-      }
-    }
-  }, [map, updateHighlightLayer])
-
-  useEffect(() => {
-    if (!map) return
-
-    const handleMapClick = (event: mapboxgl.MapLayerMouseEvent) => {
-      const features = event.features as GeoJSON.Feature[] | undefined
-      if (!features || !features.length) return
-      const feature = features[0]
-      const blockId = getFeatureBlockId(feature)
-      if (!blockId) return
-
-      setSelectedBlocks((prev) => {
-        const exists = prev.find((item) => item.id === blockId)
-        if (exists) {
-          return prev.filter((item) => item.id !== blockId)
+    return blocks
+      .map((feature) => {
+        const blockId = getBlockId(feature)
+        if (!blockId) return null
+        const props = (feature.properties ?? {}) as Record<string, any>
+        return {
+          id: blockId,
+          name: props.name || 'Unnamed Block',
+          area: typeof props.area === 'number' ? props.area : undefined,
+          variety: props.variety,
+          updatedAt: props.updatedAt,
+          feature,
         }
-        return [...prev, { id: blockId, feature }]
       })
-    }
+      .filter(Boolean) as BlockRow[]
+  }, [blockEntities, blocks, featureById])
 
-    const handleMouseEnter = () => {
-      map.getCanvas().style.cursor = 'pointer'
-    }
+  const filteredRows = useMemo(() => {
+    const normalizedTerm = searchTerm.trim().toLowerCase()
+    const base = [...rows].sort((a, b) => {
+      const result = a.name.localeCompare(b.name)
+      return sortAscending ? result : -result
+    })
 
-    const handleMouseLeave = () => {
-      map.getCanvas().style.cursor = ''
-    }
+    if (!normalizedTerm) return base
 
-    if (mapSelectMode) {
-      const sourceData: GeoJSON.FeatureCollection = {
-        type: 'FeatureCollection',
-        features: blocks,
-      }
-
-      if (map.getSource(MAP_SELECT_LAYER_ID)) {
-        ;(map.getSource(MAP_SELECT_LAYER_ID) as mapboxgl.GeoJSONSource).setData(sourceData)
-      } else {
-        map.addSource(MAP_SELECT_LAYER_ID, {
-          type: 'geojson',
-          data: sourceData,
-        })
-      }
-
-      if (!map.getLayer(MAP_SELECT_LAYER_ID)) {
-        map.addLayer({
-          id: MAP_SELECT_LAYER_ID,
-          type: 'fill',
-          source: MAP_SELECT_LAYER_ID,
-          paint: {
-            'fill-color': '#2563eb',
-            'fill-opacity': 0.2,
-          },
-        })
-      }
-
-      if (!map.getLayer(MAP_SELECT_OUTLINE_LAYER_ID)) {
-        map.addLayer({
-          id: MAP_SELECT_OUTLINE_LAYER_ID,
-          type: 'line',
-          source: MAP_SELECT_LAYER_ID,
-          paint: {
-            'line-width': 1.5,
-            'line-color': '#ffffff',
-          },
-        })
-      }
-
-      map.on('mouseenter', MAP_SELECT_LAYER_ID, handleMouseEnter)
-      map.on('mouseleave', MAP_SELECT_LAYER_ID, handleMouseLeave)
-
-      map.on('click', MAP_SELECT_LAYER_ID, handleMapClick)
-    }
-
-    return () => {
-      if (mapSelectMode) {
-        map.off('click', MAP_SELECT_LAYER_ID, handleMapClick)
-        map.off('mouseenter', MAP_SELECT_LAYER_ID, handleMouseEnter)
-        map.off('mouseleave', MAP_SELECT_LAYER_ID, handleMouseLeave)
-        if (map.getLayer(MAP_SELECT_LAYER_ID)) map.removeLayer(MAP_SELECT_LAYER_ID)
-        if (map.getLayer(MAP_SELECT_OUTLINE_LAYER_ID)) map.removeLayer(MAP_SELECT_OUTLINE_LAYER_ID)
-        if (map.getSource(MAP_SELECT_LAYER_ID)) map.removeSource(MAP_SELECT_LAYER_ID)
-        map.getCanvas().style.cursor = ''
-      }
-    }
-  }, [blocks, map, mapSelectMode])
+    return base.filter((row) => row.name.toLowerCase().includes(normalizedTerm))
+  }, [rows, searchTerm, sortAscending])
 
   const toggleSelection = (blockId: string) => {
-    const feature = featureLookup.get(blockId)
-    if (!feature) return
-
-    setSelectedBlocks((prev) => {
-      const exists = prev.find((item) => item.id === blockId)
-      if (exists) {
-        return prev.filter((item) => item.id !== blockId)
-      }
-      return [...prev, { id: blockId, feature }]
-    })
-  }
-
-  const handleDeleteSelected = async () => {
-    if (!onDeleteBlocks || !selectedIds.length) return
-    const confirmed = window.confirm(
-      `Delete ${selectedIds.length} selected block${selectedIds.length === 1 ? '' : 's'}? This cannot be undone.`
-    )
-    if (!confirmed) return
-
-    try {
-      setDeleting(true)
-      await onDeleteBlocks(selectedIds)
-      setSelectedBlocks([])
-    } finally {
-      setDeleting(false)
-    }
-  }
-
-  const handleBulkUpdate = async (field: BlockFieldDefinition, value: unknown) => {
-    if (!onBulkUpdate) return
-    try {
-      setBulkUpdating(true)
-      await onBulkUpdate(field, value, selectedIds)
-      setShowBulkUpdate(false)
-    } finally {
-      setBulkUpdating(false)
-    }
-  }
-
-  const totalArea = useMemo(() => {
-    return blockEntities.reduce((sum, block) => sum + (block.area || 0), 0)
-  }, [blockEntities])
-
-  if (loading) {
-    return (
-      <div className="flex min-h-[240px] items-center justify-center">
-        <Spinner size="lg" />
-      </div>
+    setSelectedBlockIds((prev) =>
+      prev.includes(blockId) ? prev.filter((id) => id !== blockId) : [...prev, blockId]
     )
   }
+
+  const handleDelete = async () => {
+    if (!onDeleteBlocks || selectedBlockIds.length === 0) return
+    await onDeleteBlocks(selectedBlockIds)
+    setSelectedBlockIds([])
+  }
+
+  const handleRefresh = async () => {
+    await onRefresh?.()
+  }
+
+  const totalFieldCount = blockFields?.filter((field) => !field.hidden).length ?? 0
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className="text-lg font-semibold text-gray-900">Blocks ({blockEntities.length})</h3>
-          <p className="text-sm text-gray-600">
-            Total area: {formatArea(totalArea, measurementSystem)}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant={mapSelectMode ? 'default' : 'secondary'}
-            onClick={() => {
-              const next = !mapSelectMode
-              setMapSelectMode(next)
-              if (next) {
-                onRequestSelectOnMap?.()
-              }
-            }}
-            className="flex items-center gap-2"
-          >
-            <MapIcon className="h-4 w-4" />
-            {mapSelectMode ? 'Stop Map Selection' : 'Select on Map'}
-          </Button>
-
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => setShowBulkUpdate(true)}
-            disabled={!selectedIds.length || !onBulkUpdate}
-          >
-            Bulk Update ({selectedIds.length})
-          </Button>
-
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={handleDeleteSelected}
-            disabled={!selectedIds.length || deleting || !onDeleteBlocks}
-            className="flex items-center gap-2"
-          >
-            <TrashIcon className="h-4 w-4" />
-            Delete
-          </Button>
-
-          {onCreateBlocks && (
-            <Button type="button" onClick={onCreateBlocks}>
-              Create Blocks
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {blockEntities.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-6 text-center text-sm text-gray-500">
-          No blocks yet. Draw a polygon on the map or import a GIS file to create blocks for this farm.
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-lg border border-gray-200">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
+    <div className="space-y-3">
+      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th scope="col" className="w-8 px-2 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <input
+                  type="checkbox"
+                  aria-label="Select all"
+                  checked={selectedBlockIds.length > 0 && selectedBlockIds.length === filteredRows.length}
+                  onChange={(event) => {
+                    if (event.target.checked) {
+                      setSelectedBlockIds(filteredRows.map((row) => row.id))
+                    } else {
+                      setSelectedBlockIds([])
+                    }
+                  }}
+                  className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                />
+              </th>
+              <th scope="col" className="px-2 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Name</th>
+              <th scope="col" className="px-2 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Area</th>
+              <th scope="col" className="px-2 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Variety</th>
+              <th scope="col" className="px-2 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Updated</th>
+              {onEditBlock && (
+                <th scope="col" className="px-3 py-3" />
+              )}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {loading && (
               <tr>
-                <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  <span className="sr-only">Select</span>
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  Name
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  Area
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  Variety
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  Planted
-                </th>
-                {derivedFields.map((field) => (
-                  <th
-                    key={field.machineName}
-                    className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500"
-                  >
-                    {field.label}
-                  </th>
-                ))}
-                <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  Actions
-                </th>
+                <td colSpan={onEditBlock ? 6 : 5} className="px-4 py-6 text-center text-sm text-gray-500">
+                  Loading blocks…
+                </td>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 bg-white">
-              {blocks.map((feature) => {
-                const blockId = getFeatureBlockId(feature)
-                if (!blockId) return null
-                const blockEntity = blockEntities.find((block) => block.id === blockId)
-                const isSelected = selectedIds.includes(blockId)
-                const props = (feature.properties || {}) as Record<string, unknown>
-                const blockName =
-                  typeof props.name === 'string' && props.name.trim().length > 0
-                    ? props.name
-                    : 'Untitled Block'
-                const areaValue =
-                  typeof props.area === 'number'
-                    ? props.area
-                    : typeof props.area === 'string'
-                      ? Number(props.area) || 0
-                      : 0
-                const blockVariety =
-                  typeof props.variety === 'string' && props.variety.trim().length > 0
-                    ? props.variety
-                    : '—'
-                const plantingYear =
-                  typeof props.plantingYear === 'number'
-                    ? String(props.plantingYear)
-                    : typeof props.plantingYear === 'string' && props.plantingYear.trim().length > 0
-                      ? props.plantingYear
-                      : '—'
-
+            )}
+            {!loading && filteredRows.length === 0 && (
+              <tr>
+                <td colSpan={onEditBlock ? 6 : 5} className="px-4 py-6 text-center text-sm text-gray-500">
+                  No blocks match your filters.
+                </td>
+              </tr>
+            )}
+            {!loading &&
+              filteredRows.map((row) => {
+                const isSelected = selectedBlockIds.includes(row.id)
+                const isActive = selectedBlockId === row.id
                 return (
-                  <tr key={blockId} className={isSelected ? 'bg-blue-50' : undefined}>
-                    <td className="px-3 py-2 text-sm font-medium text-gray-900">
-                      <button
-                        type="button"
-                        onClick={() => toggleSelection(blockId)}
-                        className={`flex h-6 w-6 items-center justify-center rounded-full border ${
-                          isSelected
-                            ? 'border-blue-500 bg-blue-500 text-white'
-                            : 'border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-500'
-                        }`}
-                        title={isSelected ? 'Deselect block' : 'Select block'}
-                      >
-                        <CheckCircleIcon className="h-4 w-4" />
-                      </button>
+                  <tr
+                    key={row.id}
+                    className={clsx(
+                      'cursor-pointer hover:bg-gray-50',
+                      {
+                        'bg-primary-50/80 border-l-2 border-primary-400': isActive,
+                      }
+                    )}
+                    onClick={() => onOpenBlockDetails?.(row.id)}
+                  >
+                    <td className="px-2 py-3">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={(event) => {
+                          event.stopPropagation()
+                          toggleSelection(row.id)
+                        }}
+                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      />
                     </td>
-                    <td className="px-3 py-2 text-sm font-medium text-gray-900">
-                      <button
-                        type="button"
-                        onClick={() => onOpenBlockDetails?.(blockId)}
-                        className="text-left text-blue-600 underline-offset-2 hover:underline"
-                      >
-                        {blockName}
-                      </button>
-                    </td>
-                    <td className="px-3 py-2 text-sm text-gray-700">
-                      {formatArea(areaValue, measurementSystem)}
-                    </td>
-                    <td className="px-3 py-2 text-sm text-gray-700">{blockVariety}</td>
-                    <td className="px-3 py-2 text-sm text-gray-700">{plantingYear}</td>
-                    {derivedFields.map((field) => (
-                      <td key={`${blockId}-${field.machineName}`} className="px-3 py-2 text-sm text-gray-700">
-                        {formatFieldValue(props[field.machineName as keyof typeof props])}
-                      </td>
-                    ))}
-                    <td className="px-3 py-2 text-right text-sm">
-                      <div className="flex justify-end gap-2">
-                        {onEditBlock && (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => onEditBlock(blockId)}
-                          >
-                            Edit
-                          </Button>
+                    <td className="px-2 py-3 text-sm font-medium text-gray-900">
+                      <div className="flex flex-col">
+                        <span>{row.name}</span>
+                        {row.feature?.properties?.blockId && (
+                          <span className="text-xs text-gray-400">ID: {(row.feature.properties as any).blockId}</span>
                         )}
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => toggleSelection(blockId)}
-                        >
-                          {isSelected ? 'Deselect' : 'Select'}
-                        </Button>
                       </div>
                     </td>
+                    <td className="px-2 py-3 text-sm text-gray-700">{formatArea(row.area, measurementSystem)}</td>
+                    <td className="px-2 py-3 text-sm text-gray-700">{row.variety || '—'}</td>
+                    <td className="px-2 py-3 text-sm text-gray-700">{formatUpdatedAt(row.updatedAt)}</td>
+                    {onEditBlock && (
+                      <td className="px-3 py-3 text-right text-sm">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            onEditBlock?.(row.id)
+                          }}
+                          className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 transition hover:border-gray-300 hover:text-gray-900"
+                        >
+                          Edit
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 )
               })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {onBulkUpdate && (
-        <BulkUpdateModal
-          open={showBulkUpdate}
-          fields={blockFields.length ? blockFields : derivedFields}
-          onClose={() => setShowBulkUpdate(false)}
-          onSubmit={handleBulkUpdate}
-          busy={bulkUpdating}
-        />
-      )}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
-
-function getFeatureBlockId(feature: GeoJSON.Feature | undefined | null): string | null {
-  if (!feature) return null
-  const props = (feature.properties || {}) as Record<string, unknown>
-  const id = feature.id ?? props.id ?? props.blockId
-  if (id === undefined || id === null) return null
-  return String(id)
-}
-
-function formatFieldValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return '—'
-  }
-  if (typeof value === 'boolean') {
-    return value ? 'Yes' : 'No'
-  }
-  if (value instanceof Date) {
-    return value.toLocaleString()
-  }
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value.toString() : '—'
-  }
-  return String(value)
-}
-
-

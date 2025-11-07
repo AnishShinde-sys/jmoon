@@ -2,9 +2,12 @@
 
 import { useState, useMemo, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Farm } from '@/types/farm'
+import { Farm, VizSettings } from '@/types/farm'
 import BlockList from '@/components/blocks/BlockList'
-import type { Block, BlockFieldDefinition } from '@/types/block'
+import BlockDetailsPanel from '@/components/blocks/BlockDetailsPanel'
+import BlockCreationPanel from '@/components/blocks/BlockCreationPanel'
+import BlockRevisionsPanel from '@/components/blocks/BlockRevisionsPanel'
+import type { Block, BlockFieldDefinition, BlockRevision } from '@/types/block'
 import type { MeasurementSystem } from '@/types/user'
 import {
   Cog6ToothIcon,
@@ -15,7 +18,7 @@ import {
   FolderIcon,
   ClipboardDocumentListIcon,
   ArrowDownTrayIcon,
-  PencilSquareIcon,
+  PlusSmallIcon,
 } from '@heroicons/react/24/outline'
 import FarmVizSettings from './FarmVizSettings'
 import { useDatasets } from '@/hooks/useDatasets'
@@ -36,7 +39,9 @@ interface FarmSidebarProps {
   onCreateBlock?: () => void
   onShowSettings: () => void
   onShowCollaborators: () => void
-  onVizUpdate?: (settings: Farm['vizSettings']) => void
+  onVizUpdate?: (settings: VizSettings) => void
+  onVizPreviewChange?: (settings: VizSettings) => void
+  onVizPreviewReset?: () => void
   onOpenBlockDetails?: (blockId: string) => void
   onEditBlock?: (blockId: string) => void
   onDeleteBlocks?: (blockIds: string[]) => Promise<void> | void
@@ -48,6 +53,28 @@ interface FarmSidebarProps {
   onRequestSelectOnMap?: () => void
   onRefreshBlocks?: () => Promise<void> | void
   isOpen: boolean
+  blockDraftMode?: 'create' | 'edit' | null
+  createBlockName?: string
+  createBlockDescription?: string
+  createBlockHasGeometry?: boolean
+  createBlockAreaSqMeters?: number | null
+  onChangeCreateBlockName?: (value: string) => void
+  onChangeCreateBlockDescription?: (value: string) => void
+  onCancelCreateBlock?: () => void
+  onSaveCreateBlock?: () => void
+  onResetCreateBlockGeometry?: () => void
+  createBlockSaving?: boolean
+  selectedBlock?: Block | null
+  onFocusSelectedBlock?: () => void
+  onShowSelectedBlockRevisions?: (block: Block) => void
+  onEditSelectedBlock?: (block: Block) => void
+  onClearSelectedBlock?: () => void
+  showBlockRevisions?: boolean
+  onCloseBlockRevisions?: () => void
+  loadBlockRevisions?: (blockId: string) => Promise<BlockRevision[]>
+  onRevertBlockRevision?: (revisionId: string, message?: string) => Promise<void>
+  onPreviewRevision?: (revision: BlockRevision | null) => void
+  previewRevisionId?: string | null
 }
 
 export default function FarmSidebar({
@@ -62,6 +89,8 @@ export default function FarmSidebar({
   onShowSettings,
   onShowCollaborators,
   onVizUpdate,
+  onVizPreviewChange,
+  onVizPreviewReset,
   onOpenBlockDetails,
   onEditBlock,
   onDeleteBlocks,
@@ -69,6 +98,28 @@ export default function FarmSidebar({
   onRequestSelectOnMap,
   onRefreshBlocks,
   isOpen,
+  blockDraftMode = null,
+  createBlockName = '',
+  createBlockDescription = '',
+  createBlockHasGeometry = false,
+  createBlockAreaSqMeters = null,
+  onChangeCreateBlockName,
+  onChangeCreateBlockDescription,
+  onCancelCreateBlock,
+  onSaveCreateBlock,
+  onResetCreateBlockGeometry,
+  createBlockSaving = false,
+  selectedBlock = null,
+  onFocusSelectedBlock,
+  onShowSelectedBlockRevisions,
+  onEditSelectedBlock,
+  onClearSelectedBlock,
+  showBlockRevisions = false,
+  onCloseBlockRevisions,
+  loadBlockRevisions,
+  onRevertBlockRevision,
+  onPreviewRevision,
+  previewRevisionId = null,
 }: FarmSidebarProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState<'viz' | 'list' | 'cloud' | 'datasets' | 'collectors' | 'plugins'>(
@@ -82,10 +133,20 @@ export default function FarmSidebar({
   }
 
   // Update visualization settings
-  const handleVizUpdate = (settings: Farm['vizSettings']) => {
+  const handleVizUpdate = (settings: VizSettings) => {
     if (onVizUpdate) {
       onVizUpdate(settings)
     }
+  }
+
+  const handleVizPreviewChange = (settings: VizSettings) => {
+    if (onVizPreviewChange) {
+      onVizPreviewChange(settings)
+    }
+  }
+
+  const handleVizPreviewReset = () => {
+    onVizPreviewReset?.()
   }
 
   // Download handlers
@@ -143,15 +204,12 @@ export default function FarmSidebar({
     URL.revokeObjectURL(url)
   }
 
-  const handleCreateBlockClick = () => {
-    if (!onCreateBlock) return
-    setActiveTab('list')
-    onCreateBlock()
-  }
-
   const handlePrint = () => {
     window.print()
   }
+
+  const isDraftingBlock = blockDraftMode !== null
+  const draftMode = blockDraftMode ?? 'create'
 
   return (
     <>
@@ -205,9 +263,7 @@ export default function FarmSidebar({
             title="Block List"
             aria-label="Block List"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-            </svg>
+            <CubeIcon className="w-5 h-5" />
           </button>
           <button
             onClick={() => setActiveTab('datasets')}
@@ -256,10 +312,69 @@ export default function FarmSidebar({
           {/* Content */}
         <div className="flex-1 overflow-y-auto px-4 py-4">
           {activeTab === 'viz' && (
-            <FarmVizSettings farm={farm} onUpdate={handleVizUpdate} />
+            <FarmVizSettings
+              farm={farm}
+              onUpdate={handleVizUpdate}
+              onPreviewChange={handleVizPreviewChange}
+              onPreviewReset={handleVizPreviewReset}
+            />
           )}
           {activeTab === 'list' && (
             <div className="py-4 space-y-3">
+              {isDraftingBlock && (
+                <BlockCreationPanel
+                  mode={draftMode}
+                  name={createBlockName}
+                  description={createBlockDescription}
+                  onNameChange={(value) => onChangeCreateBlockName?.(value)}
+                  onDescriptionChange={(value) => onChangeCreateBlockDescription?.(value)}
+                  onCancel={() => onCancelCreateBlock?.()}
+                  onSave={() => onSaveCreateBlock?.()}
+                  onResetGeometry={() => onResetCreateBlockGeometry?.()}
+                  hasGeometry={createBlockHasGeometry}
+                  areaSqMeters={createBlockAreaSqMeters}
+                  measurementSystem={measurementSystem}
+                  saving={createBlockSaving}
+                />
+              )}
+              {showBlockRevisions && selectedBlock && loadBlockRevisions && onRevertBlockRevision && (
+                <BlockRevisionsPanel
+                  block={selectedBlock}
+                  measurementSystem={measurementSystem}
+                  loadRevisions={loadBlockRevisions}
+                  onRevert={onRevertBlockRevision}
+                  onPreview={(revision) => onPreviewRevision?.(revision)}
+                  previewRevisionId={previewRevisionId}
+                  onClose={() => onCloseBlockRevisions?.()}
+                />
+              )}
+              {!isDraftingBlock && selectedBlock && (
+                <div className="space-y-3 rounded-lg">
+                  <BlockDetailsPanel
+                    block={selectedBlock}
+                    blockFields={blockFields}
+                    measurementSystem={measurementSystem}
+                    onEdit={(block) => {
+                      if (block && onEditSelectedBlock) {
+                        onEditSelectedBlock(block)
+                      }
+                    }}
+                    onShowRevisions={(block) => {
+                      if (block && onShowSelectedBlockRevisions) {
+                        onShowSelectedBlockRevisions(block)
+                      }
+                    }}
+                    onFocus={() => {
+                      onFocusSelectedBlock?.()
+                    }}
+                  />
+                </div>
+              )}
+              {!isDraftingBlock && !selectedBlock && (
+                <div className="rounded-lg border border-dashed border-gray-200 bg-white p-4 text-sm text-gray-500">
+                  <p className="mb-0">Select a block from the list to see its details.</p>
+                </div>
+              )}
               <BlockList
                 blocks={blocksGeoJson}
                 blockEntities={blockEntities}
@@ -267,6 +382,8 @@ export default function FarmSidebar({
                 measurementSystem={measurementSystem}
                 loading={blocksLoading}
                 onCreateBlocks={onCreateBlock}
+                isCreatingBlock={isDraftingBlock}
+                selectedBlockId={selectedBlock?.id}
                 onOpenBlockDetails={onOpenBlockDetails}
                 onEditBlock={onEditBlock}
                 onDeleteBlocks={onDeleteBlocks}
@@ -316,36 +433,35 @@ export default function FarmSidebar({
         </div>
 
         <div className="px-4 pb-4 pt-2">
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={onShowSettings}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
-                title="Settings"
-              >
-                <Cog6ToothIcon className="w-4 h-4 text-gray-500" />
-                Settings
-              </button>
-              <button
-                onClick={onShowCollaborators}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
-                title="Collaborators"
-              >
-                <UsersIcon className="w-4 h-4 text-gray-500" />
-                Collaborators
-              </button>
-            </div>
-            {onCreateBlock && (
-              <button
-                onClick={handleCreateBlockClick}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-yellow-500 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-yellow-600"
-                title="Create Blocks"
-              >
-                <CubeIcon className="w-5 h-5" />
-                Create Blocks
-              </button>
-            )}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={onShowSettings}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+              title="Settings"
+            >
+              <Cog6ToothIcon className="w-4 h-4 text-gray-500" />
+              Settings
+            </button>
+            <button
+              onClick={onShowCollaborators}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+              title="Collaborators"
+            >
+              <UsersIcon className="w-4 h-4 text-gray-500" />
+              Collaborators
+            </button>
           </div>
+          {onCreateBlock && (
+            <button
+              type="button"
+              onClick={onCreateBlock}
+              disabled={isDraftingBlock}
+              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <PlusSmallIcon className="h-4 w-4" aria-hidden="true" />
+              New Block
+            </button>
+          )}
         </div>
       </aside>
     </>
