@@ -41,7 +41,7 @@ export function useMap() {
       if (!map) return
 
       if (map.getLayer(layerId)) {
-        map.setPaintProperty(layerId, property, value as any)
+        map.setPaintProperty(layerId, property as any, value as any)
       }
     },
     [map]

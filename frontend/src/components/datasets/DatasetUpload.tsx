@@ -71,7 +71,7 @@ export default function DatasetUpload({ farmId, folders, currentFolderId, onUplo
         header: true,
         preview: 50,
         skipEmptyLines: true,
-        complete: (results) => {
+        complete: (results: any) => {
           const detectedHeaders: string[] = Array.isArray(results.meta.fields)
             ? (results.meta.fields as string[])
             : []
@@ -253,10 +253,15 @@ export default function DatasetUpload({ farmId, folders, currentFolderId, onUplo
                   <select
                     value={columnMapping[field] || ''}
                     onChange={(e) =>
-                      setColumnMapping((prev) => ({
-                        ...prev,
-                        [field]: e.target.value || undefined,
-                      }))
+                      setColumnMapping((prev) => {
+                        const next = { ...prev }
+                        if (e.target.value) {
+                          next[field] = e.target.value
+                        } else {
+                          delete next[field]
+                        }
+                        return next
+                      })
                     }
                     className="input"
                   >

@@ -3,6 +3,9 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Farm } from '@/types/farm'
+import BlockList from '@/components/blocks/BlockList'
+import type { Block, BlockFieldDefinition } from '@/types/block'
+import type { MeasurementSystem } from '@/types/user'
 import {
   Cog6ToothIcon,
   UsersIcon,
@@ -21,45 +24,51 @@ import type { Dataset } from '@/types/dataset'
 import type { Collector } from '@/types/collector'
 import type { PluginDefinition } from '@/types/plugin'
 import { useUI } from '@/context/UIContext'
-import type { Block, BlockFieldDefinition } from '@/types/block'
-import BlockList from '@/components/blocks/BlockList'
 
 interface FarmSidebarProps {
   farm: Farm
   blocksGeoJson: GeoJSON.Feature[]
   blockEntities: Block[]
   blockFields?: BlockFieldDefinition[]
-  measurementSystem: 'Metric' | 'Imperial'
+  measurementSystem?: MeasurementSystem
+  blocksLoading?: boolean
   onClose: () => void
-  onCreateBlock: () => void
+  onCreateBlock?: () => void
   onShowSettings: () => void
   onShowCollaborators: () => void
   onVizUpdate?: (settings: Farm['vizSettings']) => void
+  onOpenBlockDetails?: (blockId: string) => void
+  onEditBlock?: (blockId: string) => void
+  onDeleteBlocks?: (blockIds: string[]) => Promise<void> | void
+  onBulkUpdate?: (
+    field: BlockFieldDefinition,
+    value: unknown,
+    blockIds: string[]
+  ) => Promise<void> | void
+  onRequestSelectOnMap?: () => void
+  onRefreshBlocks?: () => Promise<void> | void
   isOpen: boolean
-  onOpenBlockDetails: (blockId: string) => void
-  onEditBlock: (blockId: string) => void
-  onDeleteBlocks: (blockIds: string[]) => Promise<void>
-  onBulkUpdate: (field: BlockFieldDefinition, value: unknown, blockIds: string[]) => Promise<void>
-  loadingBlocks?: boolean
 }
 
 export default function FarmSidebar({
   farm,
   blocksGeoJson,
   blockEntities,
-  blockFields = [],
+  blockFields,
   measurementSystem,
+  blocksLoading,
   onClose,
   onCreateBlock,
   onShowSettings,
   onShowCollaborators,
   onVizUpdate,
-  isOpen,
   onOpenBlockDetails,
   onEditBlock,
   onDeleteBlocks,
   onBulkUpdate,
-  loadingBlocks,
+  onRequestSelectOnMap,
+  onRefreshBlocks,
+  isOpen,
 }: FarmSidebarProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState<'viz' | 'list' | 'cloud' | 'datasets' | 'collectors' | 'plugins'>(
@@ -135,6 +144,7 @@ export default function FarmSidebar({
   }
 
   const handleCreateBlockClick = () => {
+    if (!onCreateBlock) return
     setActiveTab('list')
     onCreateBlock()
   }
@@ -249,18 +259,20 @@ export default function FarmSidebar({
             <FarmVizSettings farm={farm} onUpdate={handleVizUpdate} />
           )}
           {activeTab === 'list' && (
-            <div className="py-4">
+            <div className="py-4 space-y-3">
               <BlockList
                 blocks={blocksGeoJson}
                 blockEntities={blockEntities}
                 blockFields={blockFields}
                 measurementSystem={measurementSystem}
-                onCreateBlocks={handleCreateBlockClick}
+                loading={blocksLoading}
+                onCreateBlocks={onCreateBlock}
                 onOpenBlockDetails={onOpenBlockDetails}
                 onEditBlock={onEditBlock}
                 onDeleteBlocks={onDeleteBlocks}
                 onBulkUpdate={onBulkUpdate}
-                loading={loadingBlocks}
+                onRequestSelectOnMap={onRequestSelectOnMap}
+                onRefresh={onRefreshBlocks}
               />
             </div>
           )}
@@ -323,14 +335,16 @@ export default function FarmSidebar({
                 Collaborators
               </button>
             </div>
-            <button
-              onClick={handleCreateBlockClick}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-yellow-500 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-yellow-600"
-              title="Create Blocks"
-            >
-              <CubeIcon className="w-5 h-5" />
-              Create Blocks
-            </button>
+            {onCreateBlock && (
+              <button
+                onClick={handleCreateBlockClick}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-yellow-500 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-yellow-600"
+                title="Create Blocks"
+              >
+                <CubeIcon className="w-5 h-5" />
+                Create Blocks
+              </button>
+            )}
           </div>
         </div>
       </aside>

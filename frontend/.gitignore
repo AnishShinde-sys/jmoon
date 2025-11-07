@@ -39,3 +39,4 @@ dist-ssr
 # Build output
 build
 .next
+.vercel

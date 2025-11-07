@@ -194,9 +194,10 @@ export default function CreateBlockDrawer({
       }
 
       const nextFieldValues: Record<string, any> = {}
+      const blockRecord = blockData as unknown as Record<string, unknown>
       blockFields.forEach((field) => {
         const key = getFieldKey(field)
-        const rawValue = (blockData as Record<string, unknown>)[key]
+        const rawValue = blockRecord[key]
         if (field.type === 'Date and Time') {
           const formatted = formatDateInputValue(rawValue, Boolean(field.includeTime))
           if (formatted) {
@@ -214,7 +215,7 @@ export default function CreateBlockDrawer({
       })
       setFieldValues(nextFieldValues)
     },
-    [blockFields, blockGeometry, getFieldKey]
+    [blockFields, blockGeometry, formatDateInputValue, getFieldKey]
   )
 
   useEffect(() => {
@@ -375,7 +376,7 @@ export default function CreateBlockDrawer({
             },
           })
         }
-      const bounds = (bbox(cleaned) as mapboxgl.LngLatBoundsLike) || undefined
+        const bounds = (bbox(cleaned) as mapboxgl.LngLatBoundsLike) || undefined
         map.fitBounds(bounds, { padding: 60, duration: 800 })
       }
 
@@ -1016,4 +1017,5 @@ function deriveNameFromFeature(
   }
   return `${fallbackName || 'Imported Block'} ${index + 1}`
 }
+
 

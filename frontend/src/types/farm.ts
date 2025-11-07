@@ -1,3 +1,5 @@
+import type { BlockFieldDefinition } from '@/types/block'
+
 export interface VizSettings {
   colorOpacity: number
   colorBy: 'solid' | 'valueBased'
@@ -27,11 +29,15 @@ export interface Farm {
   }
   blocksGeoJsonPath?: string
   vizSettings?: VizSettings
+  blockFields?: BlockFieldDefinition[]
   createdAt: string
   updatedAt: string
   users?: Array<{ id: string }>
   permissions?: Record<string, 'Administrator' | 'Editor' | 'Read-only'>
   plugins?: string[]
+  blockCount?: number
+  datasetCount?: number
+  totalArea?: number
 }
 
 export interface FarmCollaborator {

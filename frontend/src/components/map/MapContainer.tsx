@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, memo } from 'react'
 import mapboxgl from 'mapbox-gl'
-import MapboxDraw from '@mapbox/mapbox-gl-draw'
 import * as turf from '@turf/turf'
 import { useMapContext } from '@/context/MapContext'
 
@@ -15,10 +14,6 @@ interface MapContainerProps {
   center?: [number, number]
   zoom?: number
   onLoad?: (map: mapboxgl.Map) => void
-  onDrawCreate?: (e: any) => void
-  onDrawUpdate?: (e: any) => void
-  onDrawDelete?: (e: any) => void
-  enableDrawing?: boolean
   blocks?: any[]
   onBlockSelect?: (blockId: string, feature: any) => void
   onBlockDoubleClick?: (blockId: string, feature: any) => void
@@ -36,10 +31,6 @@ function MapContainer({
   center = [-122.5, 38.5],
   zoom = 10,
   onLoad,
-  onDrawCreate,
-  onDrawUpdate,
-  onDrawDelete,
-  enableDrawing = false,
   blocks = [],
   onBlockSelect,
   onBlockDoubleClick,
@@ -48,7 +39,7 @@ function MapContainer({
   selectedBlockId = null,
 }: MapContainerProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null)
-  const { map, setMap, draw, setDraw } = useMapContext()
+  const { map, setMap } = useMapContext()
   const [tokenMissing, setTokenMissing] = useState(false)
 
   const getBlockIdentifier = useCallback((feature: any): string | null => {
@@ -164,61 +155,6 @@ function MapContainer({
   }, []) // Remove dependencies to prevent re-initialization
 
   // Keep persisted farm blocks mirrored inside Mapbox Draw so they can be edited
-  useEffect(() => {
-    if (!draw) return
-
-    const persistedFeatures = draw
-      .getAll()
-      .features.filter((feature: any) => feature?.properties?.__persisted)
-
-    const existingIds = new Set(persistedFeatures.map((feature: any) => String(feature.id)))
-    const incomingIds = new Set<string>()
-
-    if (Array.isArray(blocks)) {
-      blocks.forEach((feature: any) => {
-        if (!feature?.geometry) return
-        const blockId = getBlockIdentifier(feature)
-        if (!blockId) return
-        incomingIds.add(blockId)
-
-        if (!existingIds.has(blockId)) {
-          try {
-            draw.add({
-              id: blockId,
-              type: 'Feature',
-              geometry: feature.geometry,
-              properties: {
-                ...feature.properties,
-                __persisted: true,
-              },
-            } as any)
-          } catch (error) {
-            console.error('Failed to add block feature to draw:', error)
-          }
-        } else {
-          try {
-            draw.setFeatureProperty(blockId, '__persisted', true)
-            if (feature?.properties?.fillColor) {
-              draw.setFeatureProperty(blockId, 'fillColor', feature.properties.fillColor)
-            }
-          } catch (error) {
-            // ignore property update errors
-          }
-        }
-      })
-    }
-
-    persistedFeatures.forEach((feature: any) => {
-      const featureId = String(feature.id)
-      if (!incomingIds.has(featureId)) {
-        try {
-          draw.delete(featureId)
-        } catch (error) {
-          console.error('Failed to remove stale block feature from draw:', error)
-        }
-      }
-    })
-  }, [draw, blocks, getBlockIdentifier])
 
   // Handle blocks data updates - only when blocks change or source doesn't exist
   useEffect(() => {
@@ -332,71 +268,6 @@ function MapContainer({
     }
   }, [map, debouncedColor, debouncedOpacity])
 
-  // Align Mapbox Draw styling with our custom block visualization
-  useEffect(() => {
-    if (!map) return
-
-    const transparentFillLayers = [
-      'gl-draw-polygon-fill',
-      'gl-draw-polygon-fill-inactive.cold',
-      'gl-draw-polygon-fill-inactive.hot',
-      'gl-draw-polygon-fill-active',
-    ]
-
-    const legacyOutlineLayers = ['gl-draw-polygon-stroke-inactive', 'gl-draw-polygon-stroke-active']
-
-    const vertexHaloLayers = [
-      'gl-draw-polygon-and-line-vertex-halo-active',
-      'gl-draw-vertex-outer',
-    ]
-
-    const applyStyles = () => {
-      transparentFillLayers.forEach((layerId) => {
-        if (map.getLayer(layerId)) {
-          map.setPaintProperty(layerId, 'fill-opacity', 0)
-        }
-      })
-
-      if (map.getLayer('gl-draw-lines')) {
-        map.setPaintProperty('gl-draw-lines', 'line-color', debouncedColor)
-        map.setPaintProperty('gl-draw-lines', 'line-width', 3)
-        map.setPaintProperty('gl-draw-lines', 'line-opacity', 1)
-        map.setPaintProperty('gl-draw-lines', 'line-dasharray', [2, 0])
-      }
-
-      legacyOutlineLayers.forEach((layerId) => {
-        if (!map.getLayer(layerId)) return
-        if (layerId === 'gl-draw-polygon-stroke-inactive') {
-          map.setPaintProperty(layerId, 'line-opacity', 0)
-          return
-        }
-        map.setPaintProperty(layerId, 'line-color', debouncedColor)
-        map.setPaintProperty(layerId, 'line-width', 3)
-        map.setPaintProperty(layerId, 'line-opacity', 1)
-        map.setPaintProperty(layerId, 'line-dasharray', [2, 0])
-      })
-
-      vertexHaloLayers.forEach((layerId) => {
-        if (map.getLayer(layerId)) {
-          map.setPaintProperty(layerId, 'circle-radius', 6)
-        }
-      })
-
-      if (map.getLayer('gl-draw-vertex-inner')) {
-        map.setPaintProperty('gl-draw-vertex-inner', 'circle-color', debouncedColor)
-      }
-    }
-
-    if (map.loaded()) {
-      applyStyles()
-    } else {
-      map.once('idle', applyStyles)
-    }
-
-    return () => {
-      map.off('idle', applyStyles)
-    }
-  }, [map, debouncedColor])
 
   // Update selection highlight
   useEffect(() => {
@@ -417,58 +288,32 @@ function MapContainer({
     }
   }, [map, selectedBlockId])
 
-  // Sync pointer interactions with Mapbox Draw selection/editing
+  // Pointer interactions for block selection
   useEffect(() => {
-    if (!map || !draw) return
-
+    if (!map) return
     if (!map.getLayer(BLOCK_LAYER_ID)) return
 
     const handleMouseEnter = () => {
-      map.getCanvas().style.cursor = 'move'
+      map.getCanvas().style.cursor = 'pointer'
     }
 
     const handleMouseLeave = () => {
       map.getCanvas().style.cursor = ''
     }
 
-    const handleMouseDown = (e: any) => {
-      const feature = e?.features?.[0]
+    const handleClick = (e: mapboxgl.MapLayerMouseEvent) => {
+      const feature = e.features?.[0] as any
       const blockId = getBlockIdentifier(feature)
       if (!blockId) return
       e.preventDefault()
-      try {
-        draw.changeMode('direct_select', { featureId: blockId })
-      } catch (error) {
-        console.error('Failed to enter direct_select mode:', error)
-      }
-    }
-
-    const handleClick = (e: any) => {
-      const feature = e?.features?.[0]
-      const blockId = getBlockIdentifier(feature)
-      if (!blockId) return
-      if (e?.originalEvent?.detail && e.originalEvent.detail > 1) {
-        return
-      }
-      e.preventDefault()
-      try {
-        draw.changeMode('simple_select', { featureIds: [blockId] })
-      } catch (error) {
-        console.error('Failed to select block:', error)
-      }
       onBlockSelect?.(blockId, feature)
     }
 
-    const handleDoubleClick = (e: any) => {
-      const feature = e?.features?.[0]
+    const handleDoubleClick = (e: mapboxgl.MapLayerMouseEvent) => {
+      const feature = e.features?.[0] as any
       const blockId = getBlockIdentifier(feature)
       if (!blockId) return
       e.preventDefault()
-      try {
-        draw.changeMode('direct_select', { featureId: blockId })
-      } catch (error) {
-        console.error('Failed to enter edit mode for block:', error)
-      }
       if (feature?.geometry) {
         onBlockDoubleClick?.(blockId, feature)
       }
@@ -476,27 +321,25 @@ function MapContainer({
 
     map.on('mouseenter', BLOCK_LAYER_ID, handleMouseEnter)
     map.on('mouseleave', BLOCK_LAYER_ID, handleMouseLeave)
-    map.on('mousedown', BLOCK_LAYER_ID, handleMouseDown)
     map.on('click', BLOCK_LAYER_ID, handleClick)
     map.on('dblclick', BLOCK_LAYER_ID, handleDoubleClick)
 
     const doubleClickZoom = map.doubleClickZoom
     const wasDoubleClickZoomEnabled = doubleClickZoom.isEnabled()
-    if (wasDoubleClickZoomEnabled) {
+    if (onBlockDoubleClick && wasDoubleClickZoomEnabled) {
       doubleClickZoom.disable()
     }
 
     return () => {
       map.off('mouseenter', BLOCK_LAYER_ID, handleMouseEnter)
       map.off('mouseleave', BLOCK_LAYER_ID, handleMouseLeave)
-      map.off('mousedown', BLOCK_LAYER_ID, handleMouseDown)
       map.off('click', BLOCK_LAYER_ID, handleClick)
       map.off('dblclick', BLOCK_LAYER_ID, handleDoubleClick)
-      if (wasDoubleClickZoomEnabled) {
+      if (onBlockDoubleClick && wasDoubleClickZoomEnabled) {
         doubleClickZoom.enable()
       }
     }
-  }, [map, draw, onBlockSelect, onBlockDoubleClick, getBlockIdentifier])
+  }, [map, onBlockSelect, onBlockDoubleClick, getBlockIdentifier])
 
   // Handle label visibility
   useEffect(() => {
@@ -567,23 +410,31 @@ function MapContainer({
     map.addControl(newDraw as any, 'top-left')
     setDraw(newDraw)
 
+    if (!enableDrawing) {
+      try {
+        newDraw.changeMode('static')
+      } catch (error) {
+        console.warn('Failed to set draw to static mode:', error)
+      }
+    }
+
     // Setup event listeners
-    if (onDrawCreate) {
+    if (enableDrawing && onDrawCreate) {
       map.on('draw.create', onDrawCreate)
     }
-    if (onDrawUpdate) {
+    if (enableDrawing && onDrawUpdate) {
       map.on('draw.update', onDrawUpdate)
     }
-    if (onDrawDelete) {
+    if (enableDrawing && onDrawDelete) {
       map.on('draw.delete', onDrawDelete)
     }
 
     return () => {
-      if (onDrawCreate) map.off('draw.create', onDrawCreate)
-      if (onDrawUpdate) map.off('draw.update', onDrawUpdate)
-      if (onDrawDelete) map.off('draw.delete', onDrawDelete)
+      if (enableDrawing && onDrawCreate) map.off('draw.create', onDrawCreate)
+      if (enableDrawing && onDrawUpdate) map.off('draw.update', onDrawUpdate)
+      if (enableDrawing && onDrawDelete) map.off('draw.delete', onDrawDelete)
     }
-  }, [map, onDrawCreate, onDrawUpdate, onDrawDelete, setDraw])
+  }, [map, onDrawCreate, onDrawUpdate, onDrawDelete, setDraw, enableDrawing])
 
   return (
     <div className="relative w-full h-full" style={{ width: '100%', height: '100%' }}>

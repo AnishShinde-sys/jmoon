@@ -1,12 +1,12 @@
 'use client'
 
-import { useCallback, useEffect } from 'react'
+import { Suspense, useCallback, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/context/AuthContext'
 import SignUpForm from '@/components/auth/SignUpForm'
 import apiClient from '@/lib/apiClient'
 
-export default function SignUpPage() {
+function SignUpContent() {
   const { user } = useAuth()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -61,6 +61,20 @@ export default function SignUpPage() {
         <SignUpForm prefilledEmail={email} onSuccess={handleSuccess} />
       </div>
     </div>
+  )
+}
+
+export default function SignUpPage() {
+  return (
+    <Suspense
+      fallback={(
+        <div className="min-h-screen flex items-center justify-center bg-[url('/bg.png')] bg-cover bg-center bg-no-repeat">
+          <div className="rounded-md bg-black/60 px-4 py-2 text-sm text-white">Loading signup…</div>
+        </div>
+      )}
+    >
+      <SignUpContent />
+    </Suspense>
   )
 }
 

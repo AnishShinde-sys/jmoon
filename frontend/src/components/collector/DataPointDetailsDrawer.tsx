@@ -7,7 +7,7 @@ import Drawer from '@/components/ui/Drawer'
 import { useUI } from '@/context/UIContext'
 import { useAuth } from '@/context/AuthContext'
 import apiClient from '@/lib/apiClient'
-import { Collector, DataPoint } from '@/types/collector'
+import { Collector, CollectorField, DataPoint } from '@/types/collector'
 
 const DRAWER_NAME = 'dataPointDetails'
 

@@ -34,8 +34,8 @@ export const geospatialService = {
   /**
    * Get the bounding box of a feature or feature collection
    */
-  getBounds(geojson: GeoJSON.Feature | GeoJSON.FeatureCollection): turf.BBox {
-    return turf.bbox(geojson)
+  getBounds(geojson: GeoJSON.Feature | GeoJSON.FeatureCollection): [number, number, number, number] {
+    return turf.bbox(geojson) as [number, number, number, number]
   },
 
   /**

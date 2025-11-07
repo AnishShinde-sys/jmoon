@@ -388,6 +388,26 @@ export default function BlockList({
                 const blockEntity = blockEntities.find((block) => block.id === blockId)
                 const isSelected = selectedIds.includes(blockId)
                 const props = (feature.properties || {}) as Record<string, unknown>
+                const blockName =
+                  typeof props.name === 'string' && props.name.trim().length > 0
+                    ? props.name
+                    : 'Untitled Block'
+                const areaValue =
+                  typeof props.area === 'number'
+                    ? props.area
+                    : typeof props.area === 'string'
+                      ? Number(props.area) || 0
+                      : 0
+                const blockVariety =
+                  typeof props.variety === 'string' && props.variety.trim().length > 0
+                    ? props.variety
+                    : '—'
+                const plantingYear =
+                  typeof props.plantingYear === 'number'
+                    ? String(props.plantingYear)
+                    : typeof props.plantingYear === 'string' && props.plantingYear.trim().length > 0
+                      ? props.plantingYear
+                      : '—'
 
                 return (
                   <tr key={blockId} className={isSelected ? 'bg-blue-50' : undefined}>
@@ -411,16 +431,14 @@ export default function BlockList({
                         onClick={() => onOpenBlockDetails?.(blockId)}
                         className="text-left text-blue-600 underline-offset-2 hover:underline"
                       >
-                        {props.name || 'Untitled Block'}
+                        {blockName}
                       </button>
                     </td>
                     <td className="px-3 py-2 text-sm text-gray-700">
-                      {formatArea((props.area as number) || 0, measurementSystem)}
+                      {formatArea(areaValue, measurementSystem)}
                     </td>
-                    <td className="px-3 py-2 text-sm text-gray-700">{props.variety || '—'}</td>
-                    <td className="px-3 py-2 text-sm text-gray-700">
-                      {props.plantingYear ? String(props.plantingYear) : '—'}
-                    </td>
+                    <td className="px-3 py-2 text-sm text-gray-700">{blockVariety}</td>
+                    <td className="px-3 py-2 text-sm text-gray-700">{plantingYear}</td>
                     {derivedFields.map((field) => (
                       <td key={`${blockId}-${field.machineName}`} className="px-3 py-2 text-sm text-gray-700">
                         {formatFieldValue(props[field.machineName as keyof typeof props])}
@@ -492,4 +510,5 @@ function formatFieldValue(value: unknown): string {
   }
   return String(value)
 }
+
 

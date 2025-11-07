@@ -1,15 +1,24 @@
 "use client"
 
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type mapboxgl from 'mapbox-gl'
 import bbox from '@turf/bbox'
-import { PhotographIcon } from '@heroicons/react/24/outline'
+import { getDownloadURL, getStorage, ref, type Storage } from 'firebase/storage'
+import { PhotoIcon } from '@heroicons/react/24/outline'
 
 import Drawer from '@/components/ui/Drawer'
 import { Button } from '@/components/ui/button'
 import { useMapContext } from '@/context/MapContext'
 import { Block, BlockFieldDefinition } from '@/types/block'
 import { formatArea } from '@/lib/utils'
+import { app } from '@/lib/firebase'
+
+interface ImageItem {
+  url: string
+  caption?: string
+}
+
+let cachedStorage: Storage | null = null
 
 const DETAILS_HIGHLIGHT_SOURCE_ID = 'block-details-highlight-source'
 const DETAILS_HIGHLIGHT_LAYER_ID = 'block-details-highlight-fill'
@@ -38,6 +47,9 @@ export default function BlockDetailsDrawer({
 }: BlockDetailsDrawerProps) {
   const { map } = useMapContext()
 
+  const [imageMap, setImageMap] = useState<Record<string, ImageItem[]>>({})
+  const [loadingImages, setLoadingImages] = useState(false)
+
   const featureCollection = useMemo<GeoJSON.FeatureCollection | null>(() => {
     if (blockFeature?.geometry) {
       return {
@@ -59,6 +71,10 @@ export default function BlockDetailsDrawer({
     }
     return null
   }, [block, blockFeature])
+
+  const imageFields = useMemo(() => {
+    return blockFields.filter((field) => field.type === 'Image')
+  }, [blockFields])
 
   useEffect(() => {
     if (!map || !isOpen || !featureCollection) return
@@ -112,6 +128,55 @@ export default function BlockDetailsDrawer({
     }
   }, [featureCollection, isOpen, map])
 
+  useEffect(() => {
+    let isMounted = true
+
+    const loadImages = async () => {
+      if (!isOpen || !block || !imageFields.length) {
+        setImageMap({})
+        return
+      }
+
+      setLoadingImages(true)
+      const storage = ensureStorage()
+      const blockRecord = block as unknown as Record<string, unknown>
+      const next: Record<string, ImageItem[]> = {}
+
+      for (const field of imageFields) {
+        const key = getFieldKey(field)
+        const rawValue = blockRecord[key]
+        if (!Array.isArray(rawValue)) continue
+
+        const images: ImageItem[] = []
+        for (const item of rawValue) {
+          try {
+            const resolved = await resolveImageItem(item, storage)
+            if (resolved) {
+              images.push(resolved)
+            }
+          } catch (error) {
+            console.warn('Failed to resolve block image item:', error)
+          }
+        }
+
+        if (images.length) {
+          next[key] = images
+        }
+      }
+
+      if (isMounted) {
+        setImageMap(next)
+        setLoadingImages(false)
+      }
+    }
+
+    loadImages()
+
+    return () => {
+      isMounted = false
+    }
+  }, [block, imageFields, isOpen])
+
   const groupedFields = useMemo(() => {
     if (!blockFields.length) return []
     const groups = new Map<string, BlockFieldDefinition[]>()
@@ -124,10 +189,6 @@ export default function BlockDetailsDrawer({
       groups.get(group)!.push(field)
     })
     return Array.from(groups.entries())
-  }, [blockFields])
-
-  const imageFields = useMemo(() => {
-    return blockFields.filter((field) => field.type === 'Image')
   }, [blockFields])
 
   return (
@@ -235,13 +296,17 @@ export default function BlockDetailsDrawer({
 
           {imageFields.length > 0 && (
             <div className="space-y-6">
+              {loadingImages && (
+                <p className="text-xs text-gray-500">Loading images…</p>
+              )}
               {imageFields.map((field) => {
-                const images = getImageList(block, field)
-                if (!images.length) return null
+                const key = getFieldKey(field)
+                const images = imageMap[key]
+                if (!images || !images.length) return null
                 return (
-                  <div key={field.machineName}>
+                  <div key={key}>
                     <h4 className="mb-2 text-sm font-semibold text-gray-900 flex items-center gap-2">
-                      <PhotographIcon className="h-4 w-4 text-gray-500" />
+                      <PhotoIcon className="h-4 w-4 text-gray-500" />
                       {field.label}
                     </h4>
                     <div className="grid grid-cols-2 gap-3">
@@ -250,12 +315,24 @@ export default function BlockDetailsDrawer({
                           key={image.url}
                           className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50"
                         >
-                          <img src={image.url} alt={image.caption || field.label} className="h-32 w-full object-cover" />
-                          {image.caption && (
-                            <figcaption className="px-2 py-1 text-xs text-gray-500">
-                              {image.caption}
-                            </figcaption>
-                          )}
+                          <img
+                            src={image.url}
+                            alt={image.caption || field.label}
+                            className="h-32 w-full object-cover"
+                          />
+                          <figcaption className="px-2 py-1 text-xs text-gray-500">
+                            <a
+                              href={image.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary-600 hover:text-primary-700"
+                            >
+                              View full image ↗
+                            </a>
+                            {image.caption && (
+                              <span className="ml-2 text-gray-400">{image.caption}</span>
+                            )}
+                          </figcaption>
                         </figure>
                       ))}
                     </div>
@@ -284,8 +361,9 @@ export default function BlockDetailsDrawer({
 }
 
 function renderFieldValue(block: Block, field: BlockFieldDefinition): string {
-  const key = field.machineName || (field as unknown as { machine_name?: string }).machine_name || field.label
-  const value = (block as Record<string, unknown>)[key]
+  const key = getFieldKey(field)
+  const blockRecord = block as unknown as Record<string, unknown>
+  const value = blockRecord[key]
   if (value === null || value === undefined || value === '') {
     return '—'
   }
@@ -313,27 +391,70 @@ function renderFieldValue(block: Block, field: BlockFieldDefinition): string {
   return String(value)
 }
 
-interface ImageItem {
-  url: string
-  caption?: string
+function ensureStorage(): Storage | null {
+  if (cachedStorage) return cachedStorage
+  try {
+    cachedStorage = getStorage(app)
+    return cachedStorage
+  } catch (error) {
+    console.warn('Firebase storage not configured for block images:', error)
+    return null
+  }
 }
 
-function getImageList(block: Block, field: BlockFieldDefinition): ImageItem[] {
-  const key = field.machineName || (field as unknown as { machine_name?: string }).machine_name || field.label
-  const value = (block as Record<string, unknown>)[key]
-  if (!Array.isArray(value)) return []
+async function resolveImageItem(value: any, storage: Storage | null): Promise<ImageItem | null> {
+  if (!value) return null
 
-  return value
-    .map((item) => {
-      if (!item || typeof item !== 'object') return null
-      const record = item as Record<string, unknown>
-      const url = (record.url as string) || (record.large as string) || (record.path as string)
-      if (!url) return null
-      return {
-        url,
-        caption: typeof record.caption === 'string' ? record.caption : undefined,
+  const build = (url: string | null | undefined, caption?: string): ImageItem | null => {
+    if (!url) return null
+    return { url, caption }
+  }
+
+  if (typeof value === 'string') {
+    if (value.startsWith('http')) {
+      return build(value)
+    }
+    if (storage) {
+      try {
+        const downloadUrl = await getDownloadURL(ref(storage, value))
+        return build(downloadUrl)
+      } catch (error) {
+        console.warn('Failed to load image from storage path:', error)
       }
-    })
-    .filter((item): item is ImageItem => Boolean(item))
+    }
+    return null
+  }
+
+  if (typeof value === 'object') {
+    const record = value as Record<string, any>
+    if (typeof record.url === 'string' && record.url) {
+      return build(record.url, typeof record.caption === 'string' ? record.caption : undefined)
+    }
+
+    const candidates = ['large', 'path']
+    for (const key of candidates) {
+      const candidate = record[key]
+      if (typeof candidate === 'string' && candidate) {
+        if (candidate.startsWith('http')) {
+          return build(candidate, typeof record.caption === 'string' ? record.caption : undefined)
+        }
+        if (storage) {
+          try {
+            const downloadUrl = await getDownloadURL(ref(storage, candidate))
+            return build(downloadUrl, typeof record.caption === 'string' ? record.caption : undefined)
+          } catch (error) {
+            console.warn('Failed to fetch image from storage candidate:', error)
+          }
+        }
+      }
+    }
+  }
+
+  return null
 }
+
+function getFieldKey(field: BlockFieldDefinition): string {
+  return field.machineName || (field as unknown as { machine_name?: string }).machine_name || field.label
+}
+
 
