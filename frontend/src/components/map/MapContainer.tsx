@@ -273,11 +273,14 @@ function MapContainer({
   useEffect(() => {
     if (!map) return
 
-    const applyData = () => {
+    const renderBlocks = () => {
+      if (!map) return
+
       const blockSource = map.getSource(BLOCK_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
       const labelSource = map.getSource(BLOCK_LABEL_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
 
       if (!Array.isArray(blocks) || blocks.length === 0) {
+        console.debug('[MapContainer] No block features available – clearing layers')
         // Remove everything if no blocks
         try {
           if (map.getLayer(BLOCK_LABEL_LAYER_ID)) map.removeLayer(BLOCK_LABEL_LAYER_ID)
@@ -301,63 +304,96 @@ function MapContainer({
         features: buildLabelFeatures(blocks),
       }
 
-      if (blockSource) {
-        // Update existing source data
-        blockSource.setData(blockFeatureCollection as any)
-      } else {
-        // Create new source and layers together
-        console.log('🚀 Creating block sources and layers')
-        map.addSource(BLOCK_SOURCE_ID, {
-          type: 'geojson',
-          data: blockFeatureCollection as any,
-        })
-
-        // Immediately add layers after source is created
-        try {
-          map.addLayer({
-            id: BLOCK_LAYER_ID,
-            type: 'fill',
-            source: BLOCK_SOURCE_ID,
-            paint: {
-              'fill-color': '#6e59c7',
-              'fill-opacity': 0.8,
-            },
+      if (!blockSource) {
+        if (!map.getSource(BLOCK_SOURCE_ID)) {
+          map.addSource(BLOCK_SOURCE_ID, {
+            type: 'geojson',
+            data: blockFeatureCollection as any,
           })
+          console.debug('[MapContainer] Added block source')
+        }
 
-          map.addLayer({
-            id: BLOCK_OUTLINE_LAYER_ID,
-            type: 'line',
-            source: BLOCK_SOURCE_ID,
-            paint: {
-              'line-color': '#6e59c7',
-              'line-width': 3,
-              'line-opacity': 1.0,
-            },
-          })
+        if (!map.getLayer(BLOCK_LAYER_ID)) {
+          try {
+            map.addLayer({
+              id: BLOCK_LAYER_ID,
+              type: 'fill',
+              source: BLOCK_SOURCE_ID,
+              paint: {
+                'fill-color': '#6e59c7',
+                'fill-opacity': 0.8,
+              },
+            })
+            console.debug('[MapContainer] Added block fill layer')
+          } catch (error) {
+            console.error('Error adding block fill layer:', error)
+          }
+        }
 
-        } catch (error) {
-          console.error('Error adding layers with source:', error)
+        if (!map.getLayer(BLOCK_OUTLINE_LAYER_ID)) {
+          try {
+            map.addLayer({
+              id: BLOCK_OUTLINE_LAYER_ID,
+              type: 'line',
+              source: BLOCK_SOURCE_ID,
+              paint: {
+                'line-color': '#6e59c7',
+                'line-width': 3,
+                'line-opacity': 1.0,
+              },
+            })
+            console.debug('[MapContainer] Added block outline layer')
+          } catch (error) {
+            console.error('Error adding block outline layer:', error)
+          }
         }
       }
 
-      if (labelSource) {
-        labelSource.setData(labelFeatureCollection as any)
+      const activeBlockSource = map.getSource(BLOCK_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
+      if (activeBlockSource) {
+        try {
+          activeBlockSource.setData(blockFeatureCollection as any)
+          console.debug('[MapContainer] Updated block source with', blocks.length, 'features')
+        } catch (error) {
+          console.error('Failed to update block source data:', error)
+        }
+      }
+
+      if (!labelSource) {
+        if (!map.getSource(BLOCK_LABEL_SOURCE_ID)) {
+          map.addSource(BLOCK_LABEL_SOURCE_ID, {
+            type: 'geojson',
+            data: labelFeatureCollection as any,
+          })
+          console.debug('[MapContainer] Added block label source')
+        }
       } else {
-        map.addSource(BLOCK_LABEL_SOURCE_ID, {
-          type: 'geojson',
-          data: labelFeatureCollection as any,
-        })
+        try {
+          labelSource.setData(labelFeatureCollection as any)
+          console.debug('[MapContainer] Updated block label source with', labelFeatureCollection.features.length, 'features')
+        } catch (error) {
+          console.error('Failed to update block label source:', error)
+        }
       }
     }
 
-    if (!map.loaded()) {
-      map.once('load', applyData)
-      return () => {
-        map.off('load', applyData)
+    if (!map.isStyleLoaded()) {
+      map.once('load', renderBlocks)
+    } else {
+      renderBlocks()
+    }
+
+    const handleStyleData = () => {
+      if (map.isStyleLoaded()) {
+        renderBlocks()
       }
     }
 
-    applyData()
+    map.on('styledata', handleStyleData)
+
+    return () => {
+      map.off('styledata', handleStyleData)
+    }
   }, [map, blocks, buildLabelFeatures])
 
 

@@ -621,6 +621,7 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
     async (settings: VizSettings) => {
       if (!farm) return
       const previousSettings = farm.vizSettings
+      console.debug('[FarmPageClient] Saving viz settings', settings)
       setFarm({ ...farm, vizSettings: settings })
       setPreviewVizSettings(null)
       try {
@@ -630,7 +631,7 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
         setFarm(response.data)
         showAlert('Visualization settings updated.', 'success')
       } catch (error: any) {
-        console.error('Failed to update visualization settings:', error)
+        console.error('[FarmPageClient] Failed to update visualization settings:', error)
         setFarm((prev) => (prev ? { ...prev, vizSettings: previousSettings } : prev))
         setPreviewVizSettings(null)
         showAlert(error?.response?.data?.message || 'Failed to update visualization settings.', 'error')
@@ -871,11 +872,18 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
         setDetailsBlock((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev))
         setSelectedBlockId(updated.id)
       } else {
+        console.debug('[FarmPageClient] Creating new block', {
+          name: draftName.trim(),
+          description: draftDescription.trim(),
+          geometry,
+        })
+
         const createdFeature = await createBlock({
           name: draftName.trim(),
           description: draftDescription.trim() || undefined,
           geometry,
         })
+        console.debug('[FarmPageClient] Block created response', createdFeature)
         showAlert('Block created successfully.', 'success')
         const normalizedFeature = normalizeFeature(createdFeature as any)
         const createdBlockId = getFeatureBlockId(normalizedFeature)
@@ -910,23 +918,22 @@ export function FarmPageClient({ farmId, layerType, layerId }: FarmPageClientPro
             geometry,
           }
 
+          console.debug('[FarmPageClient] Selecting newly created block', {
+            createdBlockId,
+            mergedBlock,
+          })
           setDetailsBlock(mergedBlock)
           setDetailsFeature(normalizedFeature)
           setSelectedBlockId(createdBlockId)
           focusBlockOnMap(normalizedFeature, geometry)
         }
 
-        setBlockDraftMode(null)
-        setDraftBlockId(null)
-        setDraftFeature(null)
-        setDraftName('')
-        setDraftDescription('')
-        setShowBlockRevisions(false)
         clearDraftFeatures()
+        console.debug('[FarmPageClient] Refreshing blocks after create')
         await refetchBlocks()
       }
     } catch (error: any) {
-      console.error('Failed to save block draft:', error)
+      console.error('[FarmPageClient] Failed to save block draft:', error)
       showAlert(error?.response?.data?.message || 'Failed to save block changes.', 'error')
     } finally {
       setSavingDraft(false)
